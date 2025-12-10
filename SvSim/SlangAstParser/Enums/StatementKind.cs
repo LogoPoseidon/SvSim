@@ -1,0 +1,37 @@
+﻿namespace SvSim.SlangAstParser.Enums;
+
+public enum StatementKind
+{
+    Invalid,
+    Empty,
+    List,
+    Block,
+    ExpressionStatement,
+    VariableDeclaration,
+    Return,
+    Continue,
+    Break,
+    Disable,
+    Conditional,
+    Case,
+    PatternCase,
+    ForLoop,
+    RepeatLoop,
+    ForeachLoop,
+    WhileLoop,
+    DoWhileLoop,
+    ForeverLoop,
+    Timed,
+    ImmediateAssertion,
+    ConcurrentAssertion,
+    DisableFork,
+    Wait,
+    WaitFork,
+    WaitOrder,
+    EventTrigger,
+    ProceduralAssign,
+    ProceduralDeassign,
+    RandCase,
+    RandSequence,
+    ProceduralChecker
+}
