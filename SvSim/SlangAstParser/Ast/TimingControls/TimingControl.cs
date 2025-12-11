@@ -1,3 +1,8 @@
-﻿namespace SvSim.SlangAstParser.Ast.TimingControls;
+﻿using SvSim.SlangAstParser.Enums;
 
-public record TimingControl : AstNode;
+namespace SvSim.SlangAstParser.Ast.TimingControls;
+
+public abstract record TimingControl : AstNode
+{
+    public TimingControlKind? Kind;
+};
