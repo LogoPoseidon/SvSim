@@ -4,7 +4,7 @@ namespace SvSim.SlangAstParser.Ast.AssertionExprs;
 
 public record AbortAssertionExpr : AssertionExpr
 {
-    public Expression? Condition;
+    public SvExpression? Condition;
     public AssertionExpr? Expr;
     public bool? IsSync;
     public required Action Action;

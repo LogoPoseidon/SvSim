@@ -1,6 +1,6 @@
 ﻿namespace SvSim.SlangAstParser.Ast.Expressions;
 
-public record StringLiteral : Expression
+public record StringLiteral : SvExpression
 {
     public string? Value;
 };

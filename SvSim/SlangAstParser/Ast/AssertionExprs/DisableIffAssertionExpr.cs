@@ -4,6 +4,6 @@ namespace SvSim.SlangAstParser.Ast.AssertionExprs;
 
 public record DisableIffAssertionExpr : AssertionExpr
 {
-    public Expression? Condition;
+    public SvExpression? Condition;
     public AssertionExpr? Expr;
 };

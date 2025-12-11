@@ -6,7 +6,7 @@ namespace SvSim.SlangAstParser.Ast;
 public record HierarchicalReference : AstNode
 {
     public SvSymbol? Target;
-    public Expression? Expression;
+    public SvExpression? Expression;
     public Element[] Path = [];
     public int? UpwardCount;
 }

@@ -4,7 +4,7 @@ namespace SvSim.SlangAstParser.Ast.AssertionExprs;
 
 public record ConditionalAssertionExpr : AssertionExpr
 {
-    public Expression? Condition;
+    public SvExpression? Condition;
     public required AssertionExpr IfExpr;
     public AssertionExpr? ElseExpr;
 };

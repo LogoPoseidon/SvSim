@@ -5,7 +5,7 @@ namespace SvSim.SlangAstParser.Ast.TimingControls;
 
 public record SignalEventControl : TimingControl
 {
-    public Expression? Expr;
-    public Expression? IffCondition;
+    public SvExpression? Expr;
+    public SvExpression? IffCondition;
     public EdgeKind? Edge;
 };

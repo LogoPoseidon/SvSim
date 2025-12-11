@@ -2,7 +2,7 @@
 
 namespace SvSim.SlangAstParser.Ast.Expressions;
 
-public record UnbasedUnsizedIntegerLiteral : Expression
+public record UnbasedUnsizedIntegerLiteral : SvExpression
 {
     public SvInt? Value;
 };

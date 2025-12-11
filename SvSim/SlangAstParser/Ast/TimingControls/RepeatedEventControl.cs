@@ -4,6 +4,6 @@ namespace SvSim.SlangAstParser.Ast.TimingControls;
 
 public record RepeatedEventControl : TimingControl
 {
-    public Expression? Expr;
+    public SvExpression? Expr;
     public TimingControl? Event;
 };

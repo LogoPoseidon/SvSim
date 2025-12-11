@@ -9,6 +9,6 @@ public record BlockEventListControl : TimingControl
 
 public struct Event
 {
-    public Expression? Target;
+    public SvExpression? Target;
     public bool? IsBegin;
 }

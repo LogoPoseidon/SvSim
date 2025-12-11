@@ -6,5 +6,5 @@ public record SequenceWithMatchExpr : AssertionExpr
 {
     public required AssertionExpr Expr;
     public SequenceRepetition? Repetition;
-    public Expression[] MatchItems = [];
+    public SvExpression[] MatchItems = [];
 };

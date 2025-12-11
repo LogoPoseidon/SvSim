@@ -5,5 +5,5 @@ namespace SvSim.SlangAstParser.Ast.AssertionExprs;
 public record FirstMatchAssertionExpr : AssertionExpr
 {
     public required AssertionExpr Seq;
-    public Expression[] MatchItems = [];
+    public SvExpression[] MatchItems = [];
 }

@@ -2,5 +2,5 @@
 
 public abstract record SvType : SvSymbol
 {
-    
+    public ulong? MaxBitWidth;
 }

@@ -4,13 +4,13 @@ namespace SvSim.SlangAstParser.Ast.AssertionExprs;
 
 public record CaseAssertionExpr : AssertionExpr
 {
-    public Expression? Expr;
+    public SvExpression? Expr;
     public ItemGroup[] Items = [];
     public AssertionExpr? DefaultCase;
 };
 
 public struct ItemGroup
 {
-    public Expression[] Expressions;
+    public SvExpression[] Expressions;
     public required AssertionExpr Body;
 }

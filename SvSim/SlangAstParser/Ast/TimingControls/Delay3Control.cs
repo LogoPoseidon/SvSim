@@ -4,7 +4,7 @@ namespace SvSim.SlangAstParser.Ast.TimingControls;
 
 public record Delay3Control : TimingControl
 {
-    public Expression? Expr1;
-    public Expression? Expr2;
-    public Expression? Expr3;
+    public SvExpression? Expr1;
+    public SvExpression? Expr2;
+    public SvExpression? Expr3;
 };
