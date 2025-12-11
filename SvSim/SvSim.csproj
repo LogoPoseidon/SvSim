@@ -9,6 +9,9 @@
 
     <ItemGroup>
       <Folder Include="Simulation\" />
+      <Folder Include="SlangAstParser\Ast\AssignmentPatternExpressionBases\" />
+      <Folder Include="SlangAstParser\Ast\BinsSelectExprs\" />
+      <Folder Include="SlangAstParser\Ast\Statements\" />
     </ItemGroup>
 
 </Project>
