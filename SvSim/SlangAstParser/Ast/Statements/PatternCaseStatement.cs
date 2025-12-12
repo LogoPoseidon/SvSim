@@ -13,7 +13,7 @@ public record PatternCaseStatement : SvStatement
     public UniquePriorityCheck? Check;
     public struct ItemGroup
     {
-        public required Pattern Pattern;
+        public required SvPattern SvPattern;
         public SvExpression? Filter;
         public required SvStatement Stmt;
     }

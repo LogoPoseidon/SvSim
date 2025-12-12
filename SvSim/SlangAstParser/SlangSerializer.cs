@@ -15,7 +15,6 @@ public static class SlangSerializer
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
             Converters = { new JsonStringEnumConverter() },
             
-            // This is where the magic happens
             TypeInfoResolver = new DefaultJsonTypeInfoResolver
             {
                 Modifiers = { AutoRegisterAstNodes }
@@ -23,35 +22,42 @@ public static class SlangSerializer
         };
         return options;
     }
+    private static readonly string[] Suffixes = 
+    [
+        "AssignmentPatternExpression", "BinsSelectExpr", "AssertionExpr", 
+        "ValueSymbol", "Expression", "Constraint", "Statement", 
+        "Control", "Pattern", "Symbol", "Type" 
+    ];
     private static void AutoRegisterAstNodes(JsonTypeInfo typeInfo)
     {
-        if (typeInfo.Type.IsAbstract && typeof(AstNode).IsAssignableFrom(typeInfo.Type))
+        if (!typeInfo.Type.IsAbstract || !typeof(AstNode).IsAssignableFrom(typeInfo.Type)) return;
+        
+        typeInfo.PolymorphismOptions = new JsonPolymorphismOptions
         {
-            typeInfo.PolymorphismOptions = new JsonPolymorphismOptions
-            {
-                TypeDiscriminatorPropertyName = "kind",
+            TypeDiscriminatorPropertyName = "kind",
                 
-                // If we find a node we haven't coded yet, don't crash, just ignore it
-                UnknownDerivedTypeHandling = JsonUnknownDerivedTypeHandling.FallBackToNearestAncestor,
-                IgnoreUnrecognizedTypeDiscriminators = true
-            };
+            UnknownDerivedTypeHandling = JsonUnknownDerivedTypeHandling.FallBackToNearestAncestor,
+            IgnoreUnrecognizedTypeDiscriminators = true
+        };
 
-            // 1. Find all non-abstract classes in the assembly
-            var allTypes = Assembly.GetExecutingAssembly().GetTypes();
+        var allTypes = Assembly.GetExecutingAssembly().GetTypes();
 
-            // 2. Filter: Must inherit from the current abstract class (e.g., AstNode)
-            var derivedTypes = allTypes
-                .Where(t => t.IsClass && !t.IsAbstract && typeInfo.Type.IsAssignableFrom(t));
+        var derivedTypes = allTypes
+            .Where(t => t is { IsClass: true, IsAbstract: false } && typeInfo.Type.IsAssignableFrom(t));
 
-            // 3. Register them
-            foreach (var type in derivedTypes)
+        foreach (var type in derivedTypes)
+        {
+            var name = type.Name;
+            var suffix = Suffixes
+                .OrderByDescending(s => s.Length)
+                .FirstOrDefault(s => name.EndsWith(s));
+            if (suffix is not null)
             {
-                // MAGIC: Use the Class Name as the JSON "kind" discriminator
-                // If your class is "BinaryOp", it maps to JSON "kind": "BinaryOp"
-                typeInfo.PolymorphismOptions.DerivedTypes.Add(
-                    new JsonDerivedType(type, type.Name)
-                );
+                name = name[..^suffix.Length];
             }
+            typeInfo.PolymorphismOptions.DerivedTypes.Add(
+                new JsonDerivedType(type, name)
+            );
         }
     }
 }

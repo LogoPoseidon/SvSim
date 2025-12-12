@@ -8,4 +8,7 @@ public record AstNode
     public int? SourceLineEnd;
     public int? SourceColumnStart;
     public int? SourceColumnEnd;
+    public int? Addr;
+    public AstNode[] Members = [];
+    public string? Name;
 };
