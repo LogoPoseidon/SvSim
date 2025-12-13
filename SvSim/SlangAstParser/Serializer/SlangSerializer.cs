@@ -11,8 +11,7 @@ namespace SvSim.SlangAstParser.Serializer
             Converters =
             {
                 new JsonStringEnumConverter(),
-                new KindConverter(),
-                new TypeConverter()
+                new KindConverter()
             }
         };
         public static TopLevel? Parse(string json)

@@ -1,6 +1,6 @@
 ﻿namespace SvSim.SlangAstParser.AstTree.SvEnums;
 
-public enum SvDirection
+public enum SvPrimitiveDirection
 {
     In,
     Out,
