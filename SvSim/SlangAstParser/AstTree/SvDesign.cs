@@ -5,5 +5,7 @@ namespace SvSim.SlangAstParser.AstTree;
 
 public record SvDesign: IKind
 {
-    [JsonExtensionData] public Dictionary<string, JsonElement>? Data { get; init; }
+    [JsonPropertyName("name")] public required string Name { get; init; }
+    [JsonPropertyName("addr")] public required long Address { get; init; }
+    [JsonPropertyName("members")] public required IKind[] Members { get; init; }
 };

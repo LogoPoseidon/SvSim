@@ -2,6 +2,7 @@
 using System.Text.Json.Serialization;
 using SvSim.SlangAstParser.AstTree;
 using SvSim.SlangAstParser.AstTree.SvPorts;
+using SvSim.SlangAstParser.AstTree.SvScope;
 
 namespace SvSim.SlangAstParser.Serializer;
 
@@ -22,6 +23,7 @@ public class KindConverter : JsonConverter<IKind>
             "Definition"    => root.Deserialize<SvDefinition>(options),
             "Primitive"     => root.Deserialize<SvPrimitive>(options),
             "PrimitivePort"  => root.Deserialize<SvPrimitivePort>(options),
+            "CompilationUnit" => root.Deserialize<SvCompilationUnit>(options),
             _               => throw new NotImplementedException($"Unknown kind, is not implemented yet: {kind}")
         };
     }
