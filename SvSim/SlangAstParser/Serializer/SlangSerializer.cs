@@ -8,10 +8,10 @@ namespace SvSim.SlangAstParser.Serializer
         private static readonly JsonSerializerOptions Options = new()
         {
             PropertyNameCaseInsensitive = true,
+            AllowOutOfOrderMetadataProperties = true, 
             Converters =
             {
                 new JsonStringEnumConverter(),
-                new KindConverter()
             }
         };
         public static TopLevel? Parse(string json)
