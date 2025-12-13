@@ -3,7 +3,5 @@
 using System.Text.Json;
 using SvSim.SlangAstParser;
 
-var json = File.ReadAllText("/home/timo/slang/tests/regression/test.json");
-var serializerOptions = SlangSerializer.GetOptions();
-var readJson = JsonSerializer.Deserialize<Design>(json, serializerOptions);
+var json = File.ReadAllText(@"E:\Hardware\SystemVerilogTests\testbench.json");
 Console.WriteLine("Hello, World!");

@@ -1,8 +1,0 @@
-﻿using SvSim.SlangAstParser.Ast.Expressions;
-
-namespace SvSim.SlangAstParser.Ast.Statements;
-
-public record ReturnStatement : SvStatement
-{
-    public SvExpression? Expr;
-};
