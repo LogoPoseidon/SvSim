@@ -1,7 +1,7 @@
-﻿// See https://aka.ms/new-console-template for more information
-
-using System.Text.Json;
+﻿using System.Text.Json;
 using SvSim.SlangAstParser;
+using SvSim.SlangAstParser.Serializer;
 
 var json = File.ReadAllText(@"E:\Hardware\SystemVerilogTests\testbench.json");
-Console.WriteLine("Hello, World!");
+var topLevel = SlangSerializer.Parse(json);
+;
