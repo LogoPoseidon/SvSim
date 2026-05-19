@@ -12,32 +12,55 @@ public partial class SystemCallStatement(
     List<IExpression<SimLogic<BigInteger>>> args, 
     EventScheduler scheduler) : IStatement
 {
+    private static ISimEvent? _activeMonitor;
     public IEnumerable<YieldInstruction> Execute()
     {
+        string formatted;
         switch (subroutine)
         {
             case "$display":
-            {
-                var formatted = formatString;
-                var matches = MyRegex().Matches(formatted);
-        
-                for (var i = 0; i < Math.Min(matches.Count, args.Count); i++)
-                {
-                    var val = args[i].Evaluate().Value;
-                    var specifier = matches[i].Value;
-                    var replacement = specifier switch
-                    {
-                        not null when specifier.EndsWith('h') => val.ToString("X"),
-                        not null when specifier.EndsWith('d') => val.ToString(),
-                        not null when specifier.EndsWith('b') => ToBinaryString(val),
-                        _ => val.ToString()
-                    };
-                    var pos = formatted.IndexOf(specifier);
-                    formatted = formatted.Remove(pos, specifier.Length).Insert(pos, replacement);
-                }
+                formatted = FormatMessage(formatString, args);
                 Console.WriteLine(formatted);
                 break;
-            }
+            case "$write":
+                formatted = FormatMessage(formatString, args);
+                Console.Write(formatted);
+                break;
+            case "$strobe":
+                var strobeEv = new StrobeEvent(formatString, args);
+                scheduler.Schedule(EventRegion.Postponed, strobeEv);
+                break;
+            case "$monitor":
+                if (_activeMonitor is MonitorEvent oldMonitor)
+                {
+                    scheduler.OnPostponedStep -= oldMonitor.CheckMonitor;
+                }
+
+                var monitorEv = new MonitorEvent(formatString, args, scheduler);
+                _activeMonitor = monitorEv;
+
+                scheduler.OnPostponedStep += monitorEv.CheckMonitor;
+
+                // Schedule the initial print immediately at the end of the current time step
+                scheduler.Schedule(EventRegion.Postponed, monitorEv);
+                break;
+            case "$info":
+                formatted = FormatMessage(formatString, args);
+                Console.WriteLine($"[INFO] {formatted}");
+                break;
+            case "$warning":
+                formatted = FormatMessage(formatString, args);
+                Console.WriteLine($"\e[33m[WARNING] {formatted}\e[0m"); // Yellow
+                break;
+            case "$error":
+                formatted = FormatMessage(formatString, args);
+                Console.WriteLine($"\e[31m[ERROR] {formatted}\e[0m"); // Red
+                break;
+            case "$fatal":
+                formatted = FormatMessage(formatString, args);
+                Console.WriteLine($"\e[31;1m[FATAL] {formatted}\e[0m"); // Bold Red
+                Environment.Exit(1);
+                break;
             case "$finish":
                 Console.WriteLine($"[Sim Time {scheduler.CurrentTime}] $finish called.");
                 Environment.Exit(0);
@@ -45,6 +68,58 @@ public partial class SystemCallStatement(
         }
 
         yield break;
+    }
+
+    private static string FormatMessage(string format, List<IExpression<SimLogic<BigInteger>>> formatArgs)
+    {
+        var formatted = format;
+        var matches = FormatSpecifierRegex().Matches(formatted);
+
+        for (var i = 0; i < Math.Min(matches.Count, formatArgs.Count); i++)
+        {
+            var val = formatArgs[i].Evaluate().Value;
+            var specifier = matches[i].Value;
+            var lastChar = char.ToLower(specifier[^1]);
+            
+            var replacement = lastChar switch
+            {
+                'h' or 'x' => val.ToString("X"),
+                'd' => val.ToString(),
+                'b' => ToBinaryString(val),
+                'o' => ToOctalString(val),
+                's' => DecodeBigIntegerToString(val),
+                _ => val.ToString()
+            };
+            
+            formatted = ReplaceFirst(formatted, specifier, replacement);
+        }
+        return formatted;
+    }
+
+    private static string DecodeBigIntegerToString(BigInteger val)
+    {
+        var chars = new List<char>();
+        var temp = val;
+        while (temp > 0)
+        {
+            chars.Add((char)(temp & 0xFF));
+            temp >>= 8;
+        }
+        chars.Reverse();
+        return new string(chars.ToArray());
+    }
+
+    private static string ToOctalString(BigInteger bigint)
+    {
+        if (bigint == 0) return "0";
+        var result = new System.Text.StringBuilder();
+        var temp = bigint;
+        while (temp > 0)
+        {
+            result.Insert(0, (temp % 8).ToString());
+            temp /= 8;
+        }
+        return result.ToString();
     }
 
     private static string ToBinaryString(BigInteger bigint)
@@ -69,5 +144,68 @@ public partial class SystemCallStatement(
     }
 
     [System.Text.RegularExpressions.GeneratedRegex("%[0-9]*[a-zA-Z]")]
-    private static partial System.Text.RegularExpressions.Regex MyRegex();
+    private static partial System.Text.RegularExpressions.Regex FormatSpecifierRegex();
+    
+    private class StrobeEvent(string formatted, List<IExpression<SimLogic<BigInteger>>> args) : ISimEvent
+    {
+        public void Execute()
+        {
+            var msg = FormatMessage(formatted, args);
+            Console.WriteLine(msg);
+        }
+
+        public void Trigger()
+        {
+            throw new NotImplementedException();
+        }
+    }
+
+    private class MonitorEvent(string formatted, List<IExpression<SimLogic<BigInteger>>> args, EventScheduler scheduler) : ISimEvent
+    {
+        private List<BigInteger> _prevValues = EvaluateArgs(args);
+        private bool _firstRun = true;
+
+        private static List<BigInteger> EvaluateArgs(List<IExpression<SimLogic<BigInteger>>> expressions)
+        {
+            return expressions.Select(expr => expr.Evaluate().Value).ToList();
+        }
+
+        public void Execute()
+        {
+            CheckMonitor();
+        }
+
+        public void Trigger()
+        {
+        }
+
+        public void CheckMonitor()
+        {
+            if (_activeMonitor != this)
+            {
+                scheduler.OnPostponedStep -= CheckMonitor;
+                return;
+            }
+
+            var currentValues = EvaluateArgs(args);
+            var changed = _firstRun;
+
+            if (!_firstRun)
+            {
+                if (currentValues.Where((t, i) => !args[i].GetType().Name.StartsWith("TimeExpr") && t != _prevValues[i]).Any())
+                {
+                    changed = true;
+                }
+            }
+
+            if (changed)
+            {
+                var msg = FormatMessage(formatted, args);
+                Console.WriteLine(msg);
+                _prevValues = currentValues;
+            }
+
+            _firstRun = false;
+        }
+    }
 }

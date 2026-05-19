@@ -5,6 +5,7 @@ using SvSim.Simulation.Processes;
 using SvSim.Simulation.Expressions;
 using SvSim.Simulation.Statements;
 using SvSim.SlangAstParser.AstTree;
+using SvSim.SlangAstParser.AstTree.SvEnums;
 
 namespace SvSim.Elaboration;
 
@@ -13,8 +14,9 @@ public class StructuralElaborator
     private readonly ExpressionElaborator _exprElaborator;
     private readonly ProceduralElaborator _procElaborator;
     private readonly EventScheduler _scheduler;
-    
+
     public Dictionary<string, (IStatement body, List<ISimLogicSignal> args)> CompiledTasks { get; } = new();
+
     public StructuralElaborator(EventScheduler scheduler)
     {
         _scheduler = scheduler;
@@ -28,6 +30,7 @@ public class StructuralElaborator
         DiscoverAndProcess(design.Members, rootScope);
         return rootScope;
     }
+
     private void DiscoverAndProcess(IEnumerable<IKind> members, HierarchicalScope scope)
     {
         foreach (var member in members)
@@ -55,9 +58,9 @@ public class StructuralElaborator
         if (body?.Members == null) return scope;
 
         Console.WriteLine($"\n>>> Elaborating Instance: {scope.FullName} (Type: {body.Name})");
-        
+
         ProcessMembers(body.Members, scope);
-        
+
         if (instanceAst.Connections != null)
         {
             foreach (var conn in instanceAst.Connections)
@@ -65,12 +68,12 @@ public class StructuralElaborator
                 ElaboratePortConnection(conn);
             }
         }
-        
+
         ProcessBehavioral(body.Members, scope);
-        
+
         return scope;
     }
-    
+
     private void ProcessMembers(IEnumerable<IKind> members, HierarchicalScope scope)
     {
         foreach (var member in members)
@@ -82,19 +85,34 @@ public class StructuralElaborator
                     {
                         _exprElaborator.RegisterSignal(port.Addr, portSig);
                     }
+
                     break;
                 case SvVariable varAst:
-                    ElaborateVariable(varAst, scope);
+                    var sig = ElaborateVariable(varAst, scope);
+
+                    if (!string.IsNullOrEmpty(varAst.Type))
+                    {
+                        var typeParts = varAst.Type.Split(' ');
+                        if (typeParts.Length > 0 && long.TryParse(typeParts[0], out var typeId))
+                        {
+                            sig.EnumTypeId = typeId;
+                        }
+                    }
+
                     break;
                 case SvEnumType et:
+                    var mapping = new Dictionary<BigInteger, string>();
                     if (et.Members != null)
                     {
                         foreach (var m in et.Members.OfType<SvEnumValue>())
                         {
                             var val = ExpressionElaborator.ParseSlangIntToBigInt(m.Value);
+                            mapping[val.Value] = m.Name!;
                             _exprElaborator.RegisterSignal(m.Addr, val);
                         }
                     }
+
+                    EnumRegistry.Register(et.Addr, mapping);
                     break;
                 case SvInstance childInst:
                     scope.AddChild(ElaborateInstance(childInst, scope));
@@ -112,22 +130,25 @@ public class StructuralElaborator
                     {
                         _exprElaborator.RegisterSignal(mp.Addr, actualSignal);
                     }
+
                     break;
                 case SvModport modport:
                     if (modport.Members != null)
                     {
                         foreach (var mp in modport.Members.OfType<SvModportPort>())
                         {
-                            var internalSig = _exprElaborator.GetSignal(ExpressionElaborator.ExtractId(mp.InternalSymbol));
+                            var internalSig =
+                                _exprElaborator.GetSignal(ExpressionElaborator.ExtractId(mp.InternalSymbol));
                             if (internalSig != null)
                                 _exprElaborator.RegisterSignal(mp.Addr, internalSig);
                         }
                     }
+
                     break;
             }
         }
     }
-    
+
     private void ProcessBehavioral(IEnumerable<IKind> members, HierarchicalScope scope)
     {
         foreach (var member in members)
@@ -137,23 +158,128 @@ public class StructuralElaborator
                 case SvContinuousAssign assignAst:
                     ElaborateContinuousAssign(assignAst);
                     break;
-                case SvProceduralBlock { ProcedureKind: "AlwaysComb" } procBlock:
-                    _exprElaborator.ClearDependencies();
-                    var stmtTree = _procElaborator.ElaborateStatement(procBlock.Body!);
-                    _ = new AlwaysCombProcess(stmtTree, _exprElaborator.Dependencies, _scheduler);
+
+                case SvProceduralBlock block:
+                    switch (block.ProcedureKind)
+                    {
+                        case SvProceduralBlockKind.Initial:
+                            var initBody = _procElaborator.ElaborateStatement(block.Body!);
+                            new SvProcess(initBody.Execute().GetEnumerator(), _scheduler).Start();
+                            break;
+
+                        case SvProceduralBlockKind.Always:
+                            var alwaysBody = _procElaborator.ElaborateStatement(block.Body!);
+                            var foreverAlways = new ForeverStatement(alwaysBody);
+                            new SvProcess(foreverAlways.Execute().GetEnumerator(), _scheduler).Start();
+                            break;
+
+                        case SvProceduralBlockKind.AlwaysComb:
+                        case SvProceduralBlockKind.AlwaysLatch:
+                            _exprElaborator.ClearDependencies();
+                            var combBody = _procElaborator.ElaborateStatement(block.Body!);
+                            _ = new AlwaysCombProcess(combBody, _exprElaborator.Dependencies, _scheduler);
+                            break;
+
+                        case SvProceduralBlockKind.AlwaysFF:
+                            if (block.Body is SvTimed timed)
+                            {
+                                var triggers = ResolveTriggers(timed.Timing!);
+                                if (triggers.Count == 0)
+                                {
+                                    Console.WriteLine($"[Warning] No triggers found for AlwaysFF at {block.Addr}");
+                                    break;
+                                }
+
+                                var ffBody = _procElaborator.ElaborateStatement(timed.Stmt!);
+
+                                foreach (var foreverFf
+                                         in from t
+                                             in triggers
+                                         select new WaitEventStatement(t.sig, t.edge)
+                                         into wait
+                                         select new BlockStatement([wait, ffBody])
+                                         into loopBody
+                                         select new ForeverStatement(loopBody))
+                                {
+                                    new SvProcess(foreverFf.Execute().GetEnumerator(), _scheduler).Start();
+                                }
+                            }
+
+                            break;
+
+                        case SvProceduralBlockKind.Final:
+                        case null:
+                            break;
+                        default:
+                            throw new ArgumentOutOfRangeException(
+                                $"{nameof(block)} type not supported {block.GetType()}");
+                    }
+
                     break;
-                case SvProceduralBlock { ProcedureKind: "Initial" } initBlock:
-                    _ = new InitialProcess(_procElaborator.ElaborateStatement(initBlock.Body), _scheduler);
-                    break;
+
                 case SvGenerateBlock gen:
                     if (gen.Members != null) ProcessBehavioral(gen.Members, scope);
+                    break;
+
+                case SvVariable:
+                case SvParameter:
+                case SvPort:
+                case SvEnumType:
+                case SvInstance:
+                case SvModport:
+                case SvSubroutine:
                     break;
             }
         }
     }
 
-    
-    
+    private List<(ISimLogicSignal sig, SvEdgeKind edge)> ResolveTriggers(IKind timing)
+    {
+        var list = new List<(ISimLogicSignal sig, SvEdgeKind edge)>();
+        if (timing is null) return list;
+
+        switch (timing)
+        {
+            case SvSignalEvent ev:
+                var sig = _exprElaborator.ResolveSignal(ev.Expr!);
+                list.Add((sig, ev.Edge ?? SvEdgeKind.None));
+                break;
+
+            case SvList nested:
+                if (nested.List != null)
+                    foreach (var item in nested.List)
+                        list.AddRange(ResolveTriggers(item));
+                break;
+
+            case SvBinaryOp binOp:
+                list.AddRange(ResolveTriggers(binOp.Left!));
+                list.AddRange(ResolveTriggers(binOp.Right!));
+                break;
+            case SvEventList eventList:
+                if (eventList.Events != null)
+                {
+                    foreach (var item in eventList.Events)
+                    {
+                        list.AddRange(ResolveTriggers(item));
+                    }
+                }
+                break;
+            default:
+                try {
+                    var rawSig = _exprElaborator.ResolveSignal(timing);
+                    list.Add((rawSig, SvEdgeKind.None));
+                }
+                catch
+                {
+                    // ignored
+                }
+                break;
+        }
+
+        return list;
+    }
+
+
     private void BuildContinuousAssign<T>(LogicVar<T> lhs, IKind rhsAst) where T : IBinaryInteger<T>
     {
         _exprElaborator.ClearDependencies();
@@ -161,24 +287,25 @@ public class StructuralElaborator
         _ = new ContinuousAssignProcess<SimLogic<T>>(lhs, rhsExpr, _exprElaborator.Dependencies, _scheduler);
     }
 
-    private void ElaborateVariable(SvVariable ast, HierarchicalScope scope)
+    private ISimLogicSignal ElaborateVariable(SvVariable ast, HierarchicalScope scope)
     {
         var width = ParseWidth(ast.Type);
-    
+
         ISimLogicSignal simVar = width switch
         {
-            <= 8   => new LogicVar<byte>(width, new SimLogic<byte>(0, 0)),
-            <= 16  => new LogicVar<ushort>(width, new SimLogic<ushort>(0, 0)),
-            <= 32  => new LogicVar<uint>(width, new SimLogic<uint>(0, 0)),
-            <= 64  => new LogicVar<ulong>(width, new SimLogic<ulong>(0, 0)),
+            <= 8 => new LogicVar<byte>(width, new SimLogic<byte>(0, 0)),
+            <= 16 => new LogicVar<ushort>(width, new SimLogic<ushort>(0, 0)),
+            <= 32 => new LogicVar<uint>(width, new SimLogic<uint>(0, 0)),
+            <= 64 => new LogicVar<ulong>(width, new SimLogic<ulong>(0, 0)),
             <= 128 => new LogicVar<UInt128>(width, new SimLogic<UInt128>(0, 0)),
             _ => new LogicVar<BigInteger>(width, new SimLogic<BigInteger>(0, 0)),
         };
 
         scope.AddSignal(ast.Name!, simVar);
         _exprElaborator.RegisterSignal(ast.Addr, simVar);
+        return simVar;
     }
-    
+
     private void ElaborateTask(SvSubroutine ast, HierarchicalScope scope)
     {
         var taskArgs = new List<ISimLogicSignal>();
@@ -189,17 +316,17 @@ public class StructuralElaborator
             {
                 var arg = (SvFormalArgument)kind;
                 var width = ParseWidth(arg.Type);
-            
+
                 ISimLogicSignal simVar = width switch
                 {
-                    <= 8   => new LogicVar<byte>(width, new SimLogic<byte>(0, 0)),
-                    <= 16  => new LogicVar<ushort>(width, new SimLogic<ushort>(0, 0)),
-                    <= 32  => new LogicVar<uint>(width, new SimLogic<uint>(0, 0)),
-                    <= 64  => new LogicVar<ulong>(width, new SimLogic<ulong>(0, 0)),
+                    <= 8 => new LogicVar<byte>(width, new SimLogic<byte>(0, 0)),
+                    <= 16 => new LogicVar<ushort>(width, new SimLogic<ushort>(0, 0)),
+                    <= 32 => new LogicVar<uint>(width, new SimLogic<uint>(0, 0)),
+                    <= 64 => new LogicVar<ulong>(width, new SimLogic<ulong>(0, 0)),
                     <= 128 => new LogicVar<UInt128>(width, new SimLogic<UInt128>(0, 0)),
-                    _      => new LogicVar<BigInteger>(width, new SimLogic<BigInteger>(0, 0)),
+                    _ => new LogicVar<BigInteger>(width, new SimLogic<BigInteger>(0, 0)),
                 };
-            
+
                 scope.AddSignal(arg.Name!, simVar);
                 _exprElaborator.RegisterSignal(arg.Addr, simVar);
                 taskArgs.Add(simVar);
@@ -229,6 +356,7 @@ public class StructuralElaborator
                     _exprElaborator.RegisterSignal(ifPort.Addr, actualIfaceScope);
                     Console.WriteLine($"[Interface] Bound Port {ifPort.Name} to {actualIfaceScope.FullName}");
                 }
+
                 break;
         }
     }
@@ -239,11 +367,13 @@ public class StructuralElaborator
         if (!type.IsGenericType || type.GetGenericTypeDefinition() != typeof(LogicVar<>)) return;
         var T = type.GetGenericArguments()[0];
         var method = typeof(StructuralElaborator)
-            .GetMethod(nameof(BuildPortConnection), System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .GetMethod(nameof(BuildPortConnection),
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
             .MakeGenericMethod(T);
         method.Invoke(this, [internalSignal, conn, direction]);
     }
-    private void BuildPortConnection<T>(LogicVar<T> internalSignal, InstanceConnection conn, string direction) 
+
+    private void BuildPortConnection<T>(LogicVar<T> internalSignal, InstanceConnection conn, string direction)
         where T : IBinaryInteger<T>
     {
         switch (direction)
@@ -252,29 +382,33 @@ public class StructuralElaborator
             {
                 _exprElaborator.ClearDependencies();
                 var externalExpr = _exprElaborator.ElaborateExpression<T>(conn.Expr!);
-                _ = new ContinuousAssignProcess<SimLogic<T>>(internalSignal, externalExpr, _exprElaborator.Dependencies, _scheduler);
+                _ = new ContinuousAssignProcess<SimLogic<T>>(internalSignal, externalExpr, _exprElaborator.Dependencies,
+                    _scheduler);
                 break;
             }
             case "Out":
             {
                 if (conn.Expr is not SvAssignment { Left: SvNamedValue externalNet }) return;
-                
+
                 var addr = ExpressionElaborator.ExtractId(externalNet.Symbol);
                 var externalObj = _exprElaborator.GetSignal(addr);
-                
+
                 if (externalObj is LogicVar<T> externalSignal)
                 {
                     var internalExpr = new SignalCastReadExpr<T>(internalSignal);
-                    _ = new ContinuousAssignProcess<SimLogic<T>>(externalSignal, internalExpr, [internalSignal], _scheduler);
+                    _ = new ContinuousAssignProcess<SimLogic<T>>(externalSignal, internalExpr, [internalSignal],
+                        _scheduler);
                 }
+
                 break;
             }
         }
     }
+
     private void ElaborateContinuousAssign(SvContinuousAssign ast)
     {
         if (ast.Assignment is not SvAssignment { Left: SvNamedValue lhsVal } assignAst) return;
-        
+
         var addr = ExpressionElaborator.ExtractId(lhsVal.Symbol);
         var lhsObj = _exprElaborator.GetSignal(addr);
 

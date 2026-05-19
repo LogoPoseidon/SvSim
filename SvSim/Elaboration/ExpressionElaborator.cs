@@ -3,6 +3,7 @@ using SvSim.Simulation.Engine;
 using SvSim.SlangAstParser.AstTree;
 using SvSim.Simulation.Expressions;
 using SvSim.Simulation.Signal;
+using SvSim.SlangAstParser.AstTree.SvEnums;
 
 namespace SvSim.Elaboration;
 
@@ -44,16 +45,54 @@ public class ExpressionElaborator(EventScheduler scheduler)
         };
     }
     
-    private UnaryOpExpr<SimLogic<T>> ElaborateUnaryOp<T>(SvUnaryOp unaryOp) where T : IBinaryInteger<T>
+private UnaryOpExpr<SimLogic<T>> ElaborateUnaryOp<T>(SvUnaryOp unaryOp) where T : IBinaryInteger<T>
+{
+    var operand = ElaborateExpression<T>(unaryOp.Operand!);
+    
+    return unaryOp.Op switch
     {
-        var operand = ElaborateExpression<T>(unaryOp.Operand!);
-        return unaryOp.Op switch
-        {
-            "BitwiseNot" => new UnaryOpExpr<SimLogic<T>>(operand, val => ~val),
-            "Minus" => new UnaryOpExpr<SimLogic<T>>(operand, val => new SimLogic<T>(-val.Value, val.Unknown)),
-            _ => throw new NotImplementedException($"Unary Operator {unaryOp.Op} not supported.")
-        };
-    }
+        SvUnaryOperator.Plus => new UnaryOpExpr<SimLogic<T>>(operand, val => val),
+        SvUnaryOperator.Minus => new UnaryOpExpr<SimLogic<T>>(operand, val => new SimLogic<T>(T.Zero - val.Value, val.Unknown)),
+
+        SvUnaryOperator.BitwiseNot => new UnaryOpExpr<SimLogic<T>>(operand, val => ~val),
+        
+        SvUnaryOperator.LogicalNot => new UnaryOpExpr<SimLogic<T>>(operand, val => 
+            new SimLogic<T>(val.Value == T.Zero && val.Unknown == T.Zero ? T.One : T.Zero, T.Zero)),
+
+        SvUnaryOperator.BitwiseOr => new UnaryOpExpr<SimLogic<T>>(operand, val => 
+            new SimLogic<T>(val.Value != T.Zero ? T.One : T.Zero, val.Unknown != T.Zero ? T.One : T.Zero)),
+
+        SvUnaryOperator.BitwiseAnd => new UnaryOpExpr<SimLogic<T>>(operand, val => {
+
+            var allOn = (val.Value == T.AllBitsSet);
+            return new SimLogic<T>(allOn ? T.One : T.Zero, val.Unknown != T.Zero ? T.One : T.Zero);
+        }),
+
+        SvUnaryOperator.BitwiseXor => new UnaryOpExpr<SimLogic<T>>(operand, val => {
+            var count = int.CreateTruncating(T.PopCount(val.Value));
+            return new SimLogic<T>((count % 2 != 0) ? T.One : T.Zero, val.Unknown != T.Zero ? T.One : T.Zero);
+        }),
+
+        SvUnaryOperator.BitwiseNand => new UnaryOpExpr<SimLogic<T>>(operand, val => {
+             var res = val.Value == T.AllBitsSet ? T.One : T.Zero;
+             return new SimLogic<T>(res == T.Zero ? T.One : T.Zero, val.Unknown);
+        }),
+        SvUnaryOperator.BitwiseNor => new UnaryOpExpr<SimLogic<T>>(operand, val => 
+            new SimLogic<T>(val.Value == T.Zero ? T.One : T.Zero, val.Unknown)),
+        SvUnaryOperator.BitwiseXnor => new UnaryOpExpr<SimLogic<T>>(operand, val => {
+            var count = int.CreateTruncating(T.PopCount(val.Value));
+            return new SimLogic<T>((count % 2 == 0) ? T.One : T.Zero, val.Unknown);
+        }),
+
+        SvUnaryOperator.Preincrement or SvUnaryOperator.Postincrement => 
+            new UnaryOpExpr<SimLogic<T>>(operand, val => new SimLogic<T>(val.Value + T.One, val.Unknown)),
+        
+        SvUnaryOperator.Predecrement or SvUnaryOperator.Postdecrement => 
+            new UnaryOpExpr<SimLogic<T>>(operand, val => new SimLogic<T>(val.Value - T.One, val.Unknown)),
+
+        _ => throw new NotImplementedException($"Unary Operator {unaryOp.Op} not supported.")
+    };
+}
     
     private IExpression<SimLogic<T>> ElaborateSymbolLookup<T>(string symbolId) where T : IBinaryInteger<T>
     {
@@ -79,6 +118,11 @@ public class ExpressionElaborator(EventScheduler scheduler)
                 );
                 return new LiteralExpr<SimLogic<T>>(converted);
             }
+            case BigInteger rawInt:
+                return new LiteralExpr<SimLogic<T>>(new SimLogic<T>(
+                    T.CreateTruncating(rawInt), 
+                    T.Zero
+                ));
             default:
                 throw new Exception($"Symbol {symbolId} type {obj.GetType().Name} is not supported in expressions.");
         }
@@ -145,36 +189,81 @@ public class ExpressionElaborator(EventScheduler scheduler)
                 var max = ElaborateExpression<T>(callAst.Arguments![1]);
                 return new URandomRangeExpr<T>(min, max);
             }
+            case "name":
+            {
+                var instance = callAst.ThisClass;
+            
+                if (instance == null && callAst.Arguments != null && callAst.Arguments.Length > 0)
+                {
+                    instance = callAst.Arguments[0];
+                }
+
+                if (instance == null) 
+                    throw new Exception($".name() called on null instance. Subroutine: {callAst.Subroutine}");
+            
+                var sig = ResolveSignal(instance);
+                return new EnumNameExpr<T>(sig);
+            }
             default:
                 throw new NotImplementedException($"System function {callAst.Subroutine} not implemented.");
         }
     }
     
 
-    private BinaryOpExpr<SimLogic<T>> ElaborateBinaryOp<T>(SvBinaryOp binOp)
+private BinaryOpExpr<SimLogic<T>> ElaborateBinaryOp<T>(SvBinaryOp binOp)
     where T : IBinaryInteger<T>
+{
+    var left = ElaborateExpression<T>(binOp.Left!);
+    var right = ElaborateExpression<T>(binOp.Right!);
+
+    Func<SimLogic<T>, SimLogic<T>, SimLogic<T>> operation = binOp.Op switch
     {
-        var left = ElaborateExpression<T>(binOp.Left!);
-        var right = ElaborateExpression<T>(binOp.Right!);
+        SvBinaryOperator.Add => (l, r) => l + r,
+        SvBinaryOperator.Subtract => (l, r) => l - r,
+        SvBinaryOperator.Multiply => (l, r) => l * r,
+        SvBinaryOperator.Divide => (l, r) => r.Value == T.Zero 
+            ? new SimLogic<T>(T.Zero, T.AllBitsSet)
+            : new SimLogic<T>(l.Value / r.Value, l.Unknown | r.Unknown),
+        SvBinaryOperator.Mod => (l, r) => r.Value == T.Zero 
+            ? new SimLogic<T>(T.Zero, T.AllBitsSet) 
+            : new SimLogic<T>(l.Value % r.Value, l.Unknown | r.Unknown),
+        SvBinaryOperator.Power => (l, r) => {
+            var res = T.One;
+            for (var i = T.Zero; i < r.Value; i++) res *= l.Value;
+            return new SimLogic<T>(res, l.Unknown | r.Unknown);
+        },
 
-        Func<SimLogic<T>, SimLogic<T>, SimLogic<T>> operation = binOp.Op switch
-        {
-            "Add" => (l, r) => l + r,
-            "Subtract" => (l, r) => l - r,
-            "BinaryAnd" => (l, r) => l & r,
-            "BinaryOr" => (l, r) => l | r,
-            "BinaryXor" => (l, r) => l ^ r,
-            "LogicalShiftLeft" => (l, r) => l << int.CreateTruncating(r.Value),
-            "LogicalShiftRight" => (l, r) => l >> int.CreateTruncating(r.Value),
-            "Equality" => (l, r) => new SimLogic<T>(l == r ? T.One : T.Zero, T.Zero),
-            "CaseInequality" => (l, r) => new SimLogic<T>(l != r ? T.One : T.Zero, T.Zero),
-            "GreaterThanEqual" => (l, r) => new SimLogic<T>(l.Value >= r.Value ? T.One : T.Zero, T.Zero),
-            "LogicalOr" => (l, r) => new SimLogic<T>((l.Value != T.Zero || r.Value != T.Zero) ? T.One : T.Zero, T.Zero), 
-            _ => throw new NotImplementedException($"Operator {binOp.Op} not supported.")
-        };
+        SvBinaryOperator.BinaryAnd => (l, r) => l & r,
+        SvBinaryOperator.BinaryOr => (l, r) => l | r,
+        SvBinaryOperator.BinaryXor => (l, r) => l ^ r,
+        SvBinaryOperator.BinaryXnor => (l, r) => ~(l ^ r),
 
-        return new BinaryOpExpr<SimLogic<T>>(left, right, operation);
-    }
+        SvBinaryOperator.LogicalShiftLeft => (l, r) => l << int.CreateTruncating(r.Value),
+        SvBinaryOperator.LogicalShiftRight => (l, r) => l >> int.CreateTruncating(r.Value),
+        SvBinaryOperator.ArithmeticShiftLeft => (l, r) => l << int.CreateTruncating(r.Value),
+        SvBinaryOperator.ArithmeticShiftRight => (l, r) => l.ArithmeticRightShift(int.CreateTruncating(r.Value), 32),
+        SvBinaryOperator.Equality => (l, r) => new SimLogic<T>(l == r ? T.One : T.Zero, T.Zero),
+        SvBinaryOperator.Inequality => (l, r) => new SimLogic<T>(l != r ? T.One : T.Zero, T.Zero),
+        SvBinaryOperator.CaseEquality => (l, r) => new SimLogic<T>(l == r ? T.One : T.Zero, T.Zero),
+        SvBinaryOperator.CaseInequality => (l, r) => new SimLogic<T>(l != r ? T.One : T.Zero, T.Zero),
+        SvBinaryOperator.GreaterThan => (l, r) => new SimLogic<T>(l.Value > r.Value ? T.One : T.Zero, T.Zero),
+        SvBinaryOperator.GreaterThanEqual => (l, r) => new SimLogic<T>(l.Value >= r.Value ? T.One : T.Zero, T.Zero),
+        SvBinaryOperator.LessThan => (l, r) => new SimLogic<T>(l.Value < r.Value ? T.One : T.Zero, T.Zero),
+        SvBinaryOperator.LessThanEqual => (l, r) => new SimLogic<T>(l.Value <= r.Value ? T.One : T.Zero, T.Zero),
+
+        SvBinaryOperator.LogicalAnd => (l, r) => new SimLogic<T>((l.Value != T.Zero && r.Value != T.Zero) ? T.One : T.Zero, T.Zero),
+        SvBinaryOperator.LogicalOr => (l, r) => new SimLogic<T>((l.Value != T.Zero || r.Value != T.Zero) ? T.One : T.Zero, T.Zero),
+        SvBinaryOperator.LogicalImplication => (l, r) => new SimLogic<T>((l.Value == T.Zero || r.Value != T.Zero) ? T.One : T.Zero, T.Zero),
+        SvBinaryOperator.LogicalEquivalence => (l, r) => new SimLogic<T>((l.Value == r.Value) ? T.One : T.Zero, T.Zero),
+
+        SvBinaryOperator.WildcardEquality => (l, r) => new SimLogic<T>(l == r ? T.One : T.Zero, T.Zero),
+        SvBinaryOperator.WildcardInequality => (l, r) => new SimLogic<T>(l != r ? T.One : T.Zero, T.Zero),
+
+        _ => throw new NotImplementedException($"Operator {binOp.Op} not supported.")
+    };
+
+    return new BinaryOpExpr<SimLogic<T>>(left, right, operation);
+}
 
     private static SimLogic<T> ParseSlangInt<T>(string? slangValue) where T : IBinaryInteger<T>
     {

@@ -9,7 +9,7 @@ public abstract class SimVar<TData>(int width, TData initialValue) : ISimEventSo
     public int BitWidth { get; } = width;
     public TData Value { get; protected set; } = initialValue;
     
-    private readonly List<ISimEvent> _subscribers = [];
+    private readonly HashSet<ISimEvent> _subscribers = [];
     
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     protected abstract TData ApplyMask(TData value);
@@ -17,7 +17,8 @@ public abstract class SimVar<TData>(int width, TData initialValue) : ISimEventSo
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     protected void NotifySubscribers()
     {
-        foreach (var t in _subscribers)
+        var snapshot = _subscribers.ToArray();
+        foreach (var t in snapshot)
         {
             t.Trigger();
         }
@@ -37,7 +38,12 @@ public abstract class SimVar<TData>(int width, TData initialValue) : ISimEventSo
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Subscribe(ISimEvent consumer)
     {
-        if (!_subscribers.Contains(consumer))
-            _subscribers.Add(consumer);
+        _subscribers.Add(consumer);
+    }
+    
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void Unsubscribe(ISimEvent consumer)
+    {
+        _subscribers.Remove(consumer);
     }
 }

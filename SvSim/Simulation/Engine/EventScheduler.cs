@@ -1,19 +1,18 @@
-﻿using System;
-using System.Collections.Generic;
-using SvSim.Simulation.Processes;
+﻿using SvSim.Simulation.Processes;
 
 namespace SvSim.Simulation.Engine;
 
 public enum EventRegion
 {
-    Preponed, PreActive, Active, Inactive, PreNBA, NBA, PostNBA,
+    Preponed, PreActive, Active, Inactive, PreNba, Nba, PostNba,
     PreObserved, Observed, PostObserved, Reactive, ReInactive,
-    PreReNBA, ReNBA, PostReNBA, PrePostponed, Postponed
+    PreReNba, ReNba, PostReNba, PrePostponed, Postponed
 }
 
 public class EventScheduler
 {
     public ulong CurrentTime { get; private set; }
+    public event Action? OnPostponedStep;
 
     private readonly Queue<ISimEvent>[] _queues;
     private readonly PriorityQueue<(EventRegion Region, ISimEvent Action), ulong> _futureQueue = new();
@@ -78,24 +77,26 @@ public class EventScheduler
                 }
             }
 
-            while (HasAnyEvents(EventRegion.Reactive, EventRegion.PostReNBA))
+            while (HasAnyEvents(EventRegion.Reactive, EventRegion.PostReNba))
             {
                 Execute(EventRegion.Reactive);
                 
-                var r = GetFirstNonEmptyRegion(EventRegion.Reactive, EventRegion.PostReNBA);
+                var r = GetFirstNonEmptyRegion(EventRegion.Reactive, EventRegion.PostReNba);
                 if (r.HasValue)
                 {
                     SwapQueues(r.Value, EventRegion.Reactive);
                 }
             }
 
-            if (!HasAnyEvents(EventRegion.Active, EventRegion.PostReNBA))
+            if (!HasAnyEvents(EventRegion.Active, EventRegion.PostReNba))
             {
                 Execute(EventRegion.PrePostponed);
             }
         }
 
         Execute(EventRegion.Postponed);
+
+        OnPostponedStep?.Invoke();
     }
 
     private void Execute(EventRegion region)

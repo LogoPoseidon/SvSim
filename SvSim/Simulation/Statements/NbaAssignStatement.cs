@@ -11,7 +11,7 @@ public class NbaAssignStatement<T>(SimVar<T> lhs, IExpression<T> rhs, EventSched
     public IEnumerable<YieldInstruction> Execute()
     {
         var val = rhs.Evaluate();
-        scheduler.Schedule(EventRegion.NBA, new NbaUpdateEvent<T>(lhs, val));
+        scheduler.Schedule(EventRegion.Nba, new NbaUpdateEvent<T>(lhs, val));
         yield break;
     }
 }

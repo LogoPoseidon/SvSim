@@ -59,6 +59,10 @@ public sealed class LogicVar<T> : SimVar<SimLogic<T>>, ISimLogicSignal where T :
     }
 
     protected override SimLogic<T> ApplyMask(SimLogic<T> value) => value & _maskLogic;
+    
+    public BigInteger GetValueAsBigInt() => BigInteger.CreateTruncating(Value.Value);
+
+    public long EnumTypeId { get; set; } = 0;
 }
 
 public sealed class TracedLogicVar<T> : TracedVar<SimLogic<T>>, ISimLogicSignal where T : IBinaryInteger<T>
@@ -120,4 +124,8 @@ public sealed class TracedLogicVar<T> : TracedVar<SimLogic<T>>, ISimLogicSignal 
     protected override SimLogic<T> ApplyMask(SimLogic<T> value) => value & _maskLogic;
 
     public override string GetVcdValueString() => Value.ToVcdString(BitWidth);
+    
+    public BigInteger GetValueAsBigInt() => BigInteger.CreateTruncating(Value.Value);
+
+    public long EnumTypeId { get; set; } = 0;
 }

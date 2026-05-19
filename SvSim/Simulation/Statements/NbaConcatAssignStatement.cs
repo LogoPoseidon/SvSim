@@ -14,7 +14,7 @@ public class NbaConcatAssignStatement(
     public IEnumerable<YieldInstruction> Execute()
     {
         var evaluatedValue = rhs.Evaluate();
-        scheduler.Schedule(EventRegion.NBA, new NbaConcatUpdateEvent(lhsSignals, evaluatedValue));
+        scheduler.Schedule(EventRegion.Nba, new NbaConcatUpdateEvent(lhsSignals, evaluatedValue));
 
         yield break;
     }

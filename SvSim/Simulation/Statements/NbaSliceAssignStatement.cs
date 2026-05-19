@@ -17,7 +17,7 @@ public class NbaSliceAssignStatement(
     {
         var evaluatedValue = rhs.Evaluate();
 
-        scheduler.Schedule(EventRegion.NBA, new NbaSliceUpdateEvent(signal, msb, lsb, evaluatedValue));
+        scheduler.Schedule(EventRegion.Nba, new NbaSliceUpdateEvent(signal, msb, lsb, evaluatedValue));
 
         yield break;
     }

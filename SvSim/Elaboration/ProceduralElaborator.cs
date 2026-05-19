@@ -4,6 +4,7 @@ using SvSim.SlangAstParser.AstTree;
 using SvSim.Simulation.Statements;
 using SvSim.Simulation.Signal;
 using SvSim.Simulation.Expressions;
+using SvSim.SlangAstParser.AstTree.SvEnums;
 
 namespace SvSim.Elaboration;
 
@@ -15,6 +16,8 @@ public class ProceduralElaborator(ExpressionElaborator exprElab, EventScheduler 
         {
             SvBlock block => ElaborateBlock(block),
             SvStatementBlock stmtBlock => ElaborateStatementBlock(stmtBlock),
+            SvForeverLoop foreverAst => new ForeverStatement(ElaborateStatement(foreverAst.Body!)),
+            SvVariableDeclaration varDecl => ElaborateVariableDeclaration(varDecl),
             SvList list => ElaborateList(list),
             SvExpressionStatement exprStmt => ElaborateExpressionStmt(exprStmt),
             SvAssignment assign => ElaborateAssignment(assign),
@@ -39,13 +42,36 @@ public class ProceduralElaborator(ExpressionElaborator exprElab, EventScheduler 
     
     private BlockStatement ElaborateTimed(SvTimed timedAst)
     {
-        if (timedAst.Timing is not SvDelay { Expr: SvIntegerLiteral intLit })
-            return new BlockStatement([]);
-        var delayVal = ulong.Parse(intLit.Value!);
-        var delayStmt = new DelayStatement(delayVal);
-        var innerStmt = ElaborateStatement(timedAst.Stmt!);
-            
-        return new BlockStatement([delayStmt, innerStmt]);
+        switch (timedAst.Timing)
+        {
+            case SvDelay delay:
+            {
+                if (delay.Expr is not SvIntegerLiteral intLit)
+                    throw new NotImplementedException(
+                        $"Unsupported timing control type: {timedAst.Timing?.GetType().Name}");
+                var delayVal = ulong.Parse(intLit.Value!);
+                var innerStmt = ElaborateStatement(timedAst.Stmt!);
+                return new BlockStatement([new DelayStatement(delayVal), innerStmt]);
+            }
+            case SvSignalEvent eventControl:
+            {
+                var sig = exprElab.ResolveSignal(eventControl.Expr!);
+                var waitStmt = new WaitEventStatement(sig, eventControl.Edge ?? SvEdgeKind.None);
+                var innerStmt = ElaborateStatement(timedAst.Stmt!);
+                return new BlockStatement([waitStmt, innerStmt]);
+            }
+            default:
+                throw new NotImplementedException($"Unsupported timing control type: {timedAst.Timing?.GetType().Name}");
+        }
+    }
+    
+    private BlockStatement ElaborateVariableDeclaration(SvVariableDeclaration decl)
+    {
+        var addr = ExpressionElaborator.ExtractId(decl.Symbol);
+        
+        var simVar = new LogicVar<uint>(32, 0);
+        exprElab.RegisterSignal(addr, simVar);
+        return new BlockStatement([]);
     }
 
     private IfStatement ElaborateConditional(SvConditional condAst)
@@ -88,7 +114,7 @@ public class ProceduralElaborator(ExpressionElaborator exprElab, EventScheduler 
         {
             SvAssignment assign => ElaborateAssignment(assign),
             SvCall call => ElaborateCall(call),
-            SvUnaryOp { Op: "Postincrement" } unary => ElaboratePostIncrementHelper(unary),
+            SvUnaryOp { Op: SvUnaryOperator.Preincrement } unary => ElaboratePostIncrementHelper(unary),
             SvExpressionStatement => ElaborateStatement(exprStmt.Expr!),
             _ => new BlockStatement([])
         };
@@ -98,7 +124,7 @@ public class ProceduralElaborator(ExpressionElaborator exprElab, EventScheduler 
     {
         return unary.Op switch
         {
-            "Postincrement" or "Preincrement" => ElaboratePostIncrementHelper(unary),
+            SvUnaryOperator.Postincrement or SvUnaryOperator.Preincrement => ElaboratePostIncrementHelper(unary),
             _ => new BlockStatement([])
         };
     }

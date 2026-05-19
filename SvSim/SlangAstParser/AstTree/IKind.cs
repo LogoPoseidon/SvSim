@@ -1,4 +1,5 @@
 ﻿using System.Text.Json.Serialization;
+using SvSim.SlangAstParser.AstTree.SvEnums;
 
 namespace SvSim.SlangAstParser.AstTree
 {
@@ -416,7 +417,7 @@ namespace SvSim.SlangAstParser.AstTree
     public record SvBinaryOp : IKind
     {
         public string? Type { get; init; }
-        public string? Op { get; init; }
+        public SvBinaryOperator Op { get; init; }
         public IKind? Left { get; init; }
         public IKind? Right { get; init; }
         public string? Constant { get; init; }
@@ -649,7 +650,7 @@ namespace SvSim.SlangAstParser.AstTree
     public record SvSignalEvent : IKind
     {
         public IKind? Expr { get; init; }
-        public string? Edge { get; init; }
+        public SvEdgeKind? Edge { get; init; }
     }
 
     public record SvInstance : IKind
@@ -757,7 +758,7 @@ namespace SvSim.SlangAstParser.AstTree
     public record SvProceduralBlock : IKind
     {
         public long Addr { get; init; }
-        public string? ProcedureKind { get; init; }
+        public SvProceduralBlockKind? ProcedureKind { get; init; }
         public IKind? Body { get; init; }
     }
 
@@ -909,7 +910,7 @@ namespace SvSim.SlangAstParser.AstTree
     public record SvUnaryOp : IKind
     {
         public string? Type { get; init; }
-        public string? Op { get; init; }
+        public SvUnaryOperator? Op { get; init; }
         public IKind? Operand { get; init; }
     }
 

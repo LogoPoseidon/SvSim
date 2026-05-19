@@ -12,4 +12,6 @@ public interface ISimLogicSignal : ISimEventSource
     void WriteSlice(int msb, int lsb, SimLogic<BigInteger> value);
     
     void AssignFromBigInteger(BigInteger value, BigInteger unknown = default);
+    BigInteger GetValueAsBigInt();
+    long EnumTypeId { get; set; }
 }
