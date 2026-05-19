@@ -8,7 +8,10 @@ using SvSim.SlangAstParser.AstTree.SvEnums;
 
 namespace SvSim.Elaboration;
 
-public class ProceduralElaborator(ExpressionElaborator exprElab, EventScheduler scheduler, Dictionary<string, (IStatement body, List<ISimLogicSignal> args)> compiledTasks)
+public class ProceduralElaborator(
+    ExpressionElaborator exprElab,
+    EventScheduler scheduler,
+    Dictionary<string, (IStatement body, List<ISimLogicSignal> args)> compiledTasks)
 {
     public IStatement ElaborateStatement(IKind ast)
     {
@@ -26,20 +29,20 @@ public class ProceduralElaborator(ExpressionElaborator exprElab, EventScheduler 
             SvConditional condAst => ElaborateConditional(condAst),
             SvForLoop forAst => ElaborateForLoop(forAst),
             SvUnaryOp unary => ElaborateUnaryOpStmt(unary),
-            SvCall call => ElaborateCall(call), 
+            SvCall call => ElaborateCall(call),
             SvBreak => new BreakStatement(),
-            SvEmpty => new BlockStatement([]), 
-            _ => throw new  NotImplementedException($"{ast.GetType()} not implemented")
+            SvEmpty => new BlockStatement([]),
+            _ => throw new NotImplementedException($"{ast.GetType()} not implemented")
         };
     }
-    
+
     private BlockStatement ElaborateStatementBlock(SvStatementBlock block)
     {
         var stmts = new List<IStatement>();
         if (block.Members != null) stmts.AddRange(block.Members.Select(ElaborateStatement));
         return new BlockStatement(stmts);
     }
-    
+
     private BlockStatement ElaborateTimed(SvTimed timedAst)
     {
         switch (timedAst.Timing)
@@ -61,14 +64,18 @@ public class ProceduralElaborator(ExpressionElaborator exprElab, EventScheduler 
                 return new BlockStatement([waitStmt, innerStmt]);
             }
             default:
-                throw new NotImplementedException($"Unsupported timing control type: {timedAst.Timing?.GetType().Name}");
+                throw new NotImplementedException(
+                    $"Unsupported timing control type: {timedAst.Timing?.GetType().Name}");
         }
     }
-    
+
     private BlockStatement ElaborateVariableDeclaration(SvVariableDeclaration decl)
     {
         var addr = ExpressionElaborator.ExtractId(decl.Symbol);
         
+        if (exprElab.GetSignal(addr) != null)
+            return new BlockStatement([]);
+
         var simVar = new LogicVar<uint>(32, 0);
         exprElab.RegisterSignal(addr, simVar);
         return new BlockStatement([]);
@@ -79,7 +86,7 @@ public class ProceduralElaborator(ExpressionElaborator exprElab, EventScheduler 
         var condExpr = exprElab.ElaborateExpression<uint>(condAst.Conditions![0].Expr!);
         var ifTrue = condAst.IfTrue != null ? ElaborateStatement(condAst.IfTrue) : new BlockStatement([]);
         var ifFalse = condAst.IfFalse != null ? ElaborateStatement(condAst.IfFalse) : null;
-        
+
         return new IfStatement(condExpr, ifTrue, ifFalse);
     }
 
@@ -99,7 +106,7 @@ public class ProceduralElaborator(ExpressionElaborator exprElab, EventScheduler 
     }
 
     private IStatement ElaborateBlock(SvBlock block) => ElaborateStatement(block.Body!);
-    
+
     private BlockStatement ElaborateList(SvList list)
     {
         var stmts = new List<IStatement>();
@@ -119,7 +126,7 @@ public class ProceduralElaborator(ExpressionElaborator exprElab, EventScheduler 
             _ => new BlockStatement([])
         };
     }
-    
+
     private IStatement ElaborateUnaryOpStmt(SvUnaryOp unary)
     {
         return unary.Op switch
@@ -128,13 +135,13 @@ public class ProceduralElaborator(ExpressionElaborator exprElab, EventScheduler 
             _ => new BlockStatement([])
         };
     }
-    
+
     private IStatement ElaborateAssignment(SvAssignment assignAst)
     {
         return assignAst.Left switch
         {
             SvNamedValue namedVal => BuildStandardAssign(namedVal.Symbol!, assignAst),
-            SvHierarchicalValue hv => BuildStandardAssign(hv.Symbol!, assignAst), 
+            SvHierarchicalValue hv => BuildStandardAssign(hv.Symbol!, assignAst),
             SvMemberAccess memAcc => BuildMemberAssign(memAcc, assignAst),
             SvRangeSelect range => BuildSliceAssign(range, assignAst),
             SvElementSelect bit => BuildBitAssign(bit, assignAst),
@@ -142,7 +149,7 @@ public class ProceduralElaborator(ExpressionElaborator exprElab, EventScheduler 
             _ => throw new NotImplementedException($"Assignment to {assignAst.Left?.GetType().Name} not supported.")
         };
     }
-    
+
     private IStatement BuildStandardAssign(string symbolId, SvAssignment assignAst)
     {
         var addr = ExpressionElaborator.ExtractId(symbolId);
@@ -158,7 +165,7 @@ public class ProceduralElaborator(ExpressionElaborator exprElab, EventScheduler 
                 $"LHS '{symbolId}' is a {lhsObj.GetType().Name}, which is not an assignable logic variable.")
         };
     }
-    
+
     private IStatement BuildMemberAssign(SvMemberAccess memAcc, SvAssignment assignAst)
     {
         var sig = exprElab.ResolveSignal(memAcc);
@@ -177,11 +184,11 @@ public class ProceduralElaborator(ExpressionElaborator exprElab, EventScheduler 
             _ => BuildAssign((LogicVar<BigInteger>)sig, assignAst)
         };
     }
-    
+
     private IStatement BuildSliceAssign(SvRangeSelect rangeAst, SvAssignment assignAst)
     {
         var sig = exprElab.ResolveSignal(rangeAst.Value!);
-        
+
         var msb = ExpressionElaborator.EvaluateConstantInt(rangeAst.Left!);
         var lsb = ExpressionElaborator.EvaluateConstantInt(rangeAst.Right!);
 
@@ -189,10 +196,10 @@ public class ProceduralElaborator(ExpressionElaborator exprElab, EventScheduler 
 
         if (assignAst.IsNonBlocking)
             return new NbaSliceAssignStatement(sig, msb, lsb, rhsExpr, scheduler);
-        
+
         return new SliceAssignStatement(sig, msb, lsb, rhsExpr);
     }
-    
+
     private IStatement BuildBitAssign(SvElementSelect bitAst, SvAssignment assignAst)
     {
         var sig = exprElab.ResolveSignal(bitAst.Value!);
@@ -201,17 +208,17 @@ public class ProceduralElaborator(ExpressionElaborator exprElab, EventScheduler 
 
         if (assignAst.IsNonBlocking)
             return new NbaSliceAssignStatement(sig, index, index, rhsExpr, scheduler);
-        
+
         return new SliceAssignStatement(sig, index, index, rhsExpr);
     }
-    
+
     private IStatement BuildAssign<T>(LogicVar<T> lhs, SvAssignment assignAst) where T : IBinaryInteger<T>
     {
         var rhsExpr = exprElab.ElaborateExpression<T>(assignAst.Right!);
-        
+
         if (assignAst.IsNonBlocking)
             return new NbaAssignStatement<SimLogic<T>>(lhs, rhsExpr, scheduler);
-        
+
         return new AssignStatement<SimLogic<T>>(lhs, rhsExpr);
     }
 
@@ -233,8 +240,8 @@ public class ProceduralElaborator(ExpressionElaborator exprElab, EventScheduler 
 
         return new ConcatAssignStatement(targetSignals.ToArray(), rhsExpr);
     }
-    
-    private IStatement ElaborateCall(SvCall callAst)
+
+private IStatement ElaborateCall(SvCall callAst)
     {
         var taskName = callAst.Subroutine;
         if (!string.IsNullOrEmpty(taskName))
@@ -253,25 +260,56 @@ public class ProceduralElaborator(ExpressionElaborator exprElab, EventScheduler 
         var formatStr = "";
         var displayArgs = new List<IExpression<SimLogic<BigInteger>>>();
 
-        if (callAst.Arguments is not { Length: > 0 })
+        if (callAst.Arguments == null || callAst.Arguments.Length == 0)
+        {
             return new SystemCallStatement(callAst.Subroutine ?? "unknown", formatStr, displayArgs, scheduler);
-        
-        if (callAst.Arguments[0] is SvStringLiteral strLit)
-            formatStr = strLit.Literal ?? "";
+        }
 
-        for (var i = 1; i < callAst.Arguments.Length; i++)
+        var isFatal = callAst.Subroutine == "$fatal";
+        var isFinish = callAst.Subroutine == "$finish";
+
+        var startIdx = 0;
+        if (isFatal)
+        {
+            displayArgs.Add(exprElab.ElaborateExpression<BigInteger>(callAst.Arguments[0]));
+            if (callAst.Arguments.Length > 1 && callAst.Arguments[1] is SvStringLiteral strLit)
+            {
+                formatStr = strLit.Literal ?? "";
+                startIdx = 2;
+            }
+        }
+        else if (isFinish)
+        {
+            displayArgs.Add(exprElab.ElaborateExpression<BigInteger>(callAst.Arguments[0]));
+            startIdx = callAst.Arguments.Length;
+        }
+        else
+        {
+            if (callAst.Arguments[0] is SvStringLiteral strLit)
+            {
+                formatStr = strLit.Literal ?? "";
+                startIdx = 1;
+            }
+            else
+            {
+                formatStr = string.Join(" ", callAst.Arguments.Select(_ => "%d"));
+                startIdx = 0;
+            }
+        }
+
+        for (var i = startIdx; i < callAst.Arguments.Length; i++)
             displayArgs.Add(exprElab.ElaborateExpression<BigInteger>(callAst.Arguments[i]));
 
         return new SystemCallStatement(callAst.Subroutine ?? "unknown", formatStr, displayArgs, scheduler);
     }
-    
+
     private IStatement ElaboratePostIncrementHelper(SvUnaryOp unaryOp)
     {
         if (unaryOp.Operand is not SvNamedValue namedVal) return new BlockStatement([]);
-        
+
         var addr = ExpressionElaborator.ExtractId(namedVal.Symbol);
         var lhsObj = exprElab.GetSignal(addr);
-        
+
         return lhsObj switch
         {
             LogicVar<byte> sig8 => BuildPostIncrement(sig8),
@@ -283,14 +321,14 @@ public class ProceduralElaborator(ExpressionElaborator exprElab, EventScheduler 
             _ => throw new InvalidOperationException($"LHS ID {addr} is not a valid logic variable.")
         };
     }
-    
-    private static AssignStatement<SimLogic<T>> BuildPostIncrement<T>(LogicVar<T> lhs) 
+
+    private static AssignStatement<SimLogic<T>> BuildPostIncrement<T>(LogicVar<T> lhs)
         where T : IBinaryInteger<T>
     {
         var readExpr = new SignalCastReadExpr<T>(lhs);
         var literalOne = new LiteralExpr<SimLogic<T>>(new SimLogic<T>(T.One, T.Zero));
         var addOneExpr = new BinaryOpExpr<SimLogic<T>>(readExpr, literalOne, (l, r) => l + r);
-        
+
         return new AssignStatement<SimLogic<T>>(lhs, addOneExpr);
     }
 
@@ -306,7 +344,7 @@ public class ProceduralElaborator(ExpressionElaborator exprElab, EventScheduler 
                 var matches = new List<IExpression<SimLogic<BigInteger>>>();
                 if (item.Expressions != null)
                     matches.AddRange(item.Expressions.Select(exprElab.ElaborateExpression<BigInteger>));
-                
+
                 items.Add((matches.ToArray(), ElaborateStatement(item.Stmt!)));
             }
         }

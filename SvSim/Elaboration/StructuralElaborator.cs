@@ -132,6 +132,15 @@ public class StructuralElaborator
                     }
 
                     break;
+                case SvStatementBlock stmtBlock:
+                    if (stmtBlock.Members != null)
+                    {
+                        foreach (var m in stmtBlock.Members.OfType<SvVariable>())
+                        {
+                            ElaborateVariable(m, scope);
+                        }
+                    }
+                    break;
                 case SvModport modport:
                     if (modport.Members != null)
                     {
@@ -300,6 +309,13 @@ public class StructuralElaborator
             <= 128 => new LogicVar<UInt128>(width, new SimLogic<UInt128>(0, 0)),
             _ => new LogicVar<BigInteger>(width, new SimLogic<BigInteger>(0, 0)),
         };
+        
+        if (ast.Initializer != null)
+        {
+            _exprElaborator.ClearDependencies();
+            var initVal = _exprElaborator.ElaborateExpression<BigInteger>(ast.Initializer).Evaluate();
+            simVar.AssignFromBigInteger(initVal.Value, initVal.Unknown);
+        }
 
         scope.AddSignal(ast.Name!, simVar);
         _exprElaborator.RegisterSignal(ast.Addr, simVar);

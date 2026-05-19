@@ -57,14 +57,45 @@ public partial class SystemCallStatement(
                 Console.WriteLine($"\e[31m[ERROR] {formatted}\e[0m"); // Red
                 break;
             case "$fatal":
-                formatted = FormatMessage(formatString, args);
-                Console.WriteLine($"\e[31;1m[FATAL] {formatted}\e[0m"); // Bold Red
+            {
+                var finishNum = args.Count > 0 ? (int)args[0].Evaluate().Value : 1;
+                
+                var formatArgs = args.Skip(1).ToList();
+                formatted = FormatMessage(formatString, formatArgs);
+                
+                if (finishNum > 0)
+                {
+                    Console.Write($"\e[31;1m[FATAL] (level {finishNum}) {formatted}\e[0m");
+                    if (finishNum == 2)
+                    {
+                        Console.Write($" | Location: Sim Time {scheduler.CurrentTime}");
+                    }
+                    Console.WriteLine();
+                }
+                else
+                {
+                    Console.WriteLine($"\e[31;1m[FATAL] {formatted}\e[0m");
+                }
                 Environment.Exit(1);
                 break;
+            }
             case "$finish":
-                Console.WriteLine($"[Sim Time {scheduler.CurrentTime}] $finish called.");
+            {
+                var finishNum = args.Count > 0 ? (int)args[0].Evaluate().Value : 1;
+                
+                if (finishNum > 0)
+                {
+                    Console.Write($"[Sim Time {scheduler.CurrentTime}] $finish called");
+                    if (finishNum == 2)
+                    {
+                        var ramUsage = GC.GetTotalMemory(false) / 1024;
+                        Console.Write($" | Diagnostics [Memory: {ramUsage} KB]");
+                    }
+                    Console.WriteLine(".");
+                }
                 Environment.Exit(0);
                 break;
+            }
         }
 
         yield break;
