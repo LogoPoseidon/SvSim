@@ -15,7 +15,7 @@ public class StructuralElaborator
     private readonly ProceduralElaborator _procElaborator;
     private readonly EventScheduler _scheduler;
 
-    public Dictionary<string, (IStatement body, List<ISimLogicSignal> args)> CompiledTasks { get; } = new();
+    private Dictionary<string, (IStatement body, List<ISimLogicSignal> args)> CompiledTasks { get; } = new();
 
     public StructuralElaborator(EventScheduler scheduler)
     {
@@ -69,7 +69,7 @@ public class StructuralElaborator
             }
         }
 
-        ProcessBehavioral(body.Members, scope);
+        ProcessBehavioral(body.Members);
 
         return scope;
     }
@@ -88,17 +88,7 @@ public class StructuralElaborator
 
                     break;
                 case SvVariable varAst:
-                    var sig = ElaborateVariable(varAst, scope);
-
-                    if (!string.IsNullOrEmpty(varAst.Type))
-                    {
-                        var typeParts = varAst.Type.Split(' ');
-                        if (typeParts.Length > 0 && long.TryParse(typeParts[0], out var typeId))
-                        {
-                            sig.EnumTypeId = typeId;
-                        }
-                    }
-
+                    ElaborateVariable(varAst, scope);
                     break;
                 case SvEnumType et:
                     var mapping = new Dictionary<BigInteger, string>();
@@ -113,6 +103,15 @@ public class StructuralElaborator
                     }
 
                     EnumRegistry.Register(et.Addr, mapping);
+
+                    var baseTypeProp = et.GetType().GetProperty("BaseType") ?? et.GetType().GetProperty("Type");
+                    var baseTypeStr = baseTypeProp?.GetValue(et) as string;
+                    var enumWidth = ParseWidth(baseTypeStr ?? "logic [31:0]");
+                    if (!string.IsNullOrEmpty(et.Name))
+                    {
+                        EnumRegistry.EnumWidths[et.Name] = enumWidth;
+                    }
+
                     break;
                 case SvInstance childInst:
                     scope.AddChild(ElaborateInstance(childInst, scope));
@@ -135,16 +134,14 @@ public class StructuralElaborator
                 case SvStatementBlock stmtBlock:
                     if (stmtBlock.Members != null)
                     {
-                        foreach (var m in stmtBlock.Members.OfType<SvVariable>())
-                        {
-                            ElaborateVariable(m, scope);
-                        }
+                        ProcessMembers(stmtBlock.Members, scope);
                     }
+
                     break;
-                case SvModport modport:
-                    if (modport.Members != null)
+                case SvModport modPort:
+                    if (modPort.Members != null)
                     {
-                        foreach (var mp in modport.Members.OfType<SvModportPort>())
+                        foreach (var mp in modPort.Members.OfType<SvModportPort>())
                         {
                             var internalSig =
                                 _exprElaborator.GetSignal(ExpressionElaborator.ExtractId(mp.InternalSymbol));
@@ -154,11 +151,35 @@ public class StructuralElaborator
                     }
 
                     break;
+                case SvPackedStructType pst:
+                    RegisterPackedStruct(pst);
+                    break;
+
+                case SvUnpackedStructType ust:
+                    RegisterUnpackedStruct(ust);
+                    break;
+
+                case SvPackedUnionType put:
+                    RegisterPackedUnion(put);
+                    break;
+
+                case SvUnpackedUnionType uut:
+                    RegisterUnpackedUnion(uut);
+                    break;
+
+                case SvQueueType qt:
+                    break;
+
+                case SvDynamicArrayType dat:
+                    break;
+                default:
+                    TryRegisterTypedefOrAlias(member);
+                    break;
             }
         }
     }
 
-    private void ProcessBehavioral(IEnumerable<IKind> members, HierarchicalScope scope)
+    private void ProcessBehavioral(IEnumerable<IKind> members)
     {
         foreach (var member in members)
         {
@@ -192,7 +213,7 @@ public class StructuralElaborator
                         case SvProceduralBlockKind.AlwaysFF:
                             if (block.Body is SvTimed timed)
                             {
-                                var triggers = ResolveTriggers(timed.Timing!);
+                                var triggers = ResolveTriggers(timed.Timing);
                                 if (triggers.Count == 0)
                                 {
                                     Console.WriteLine($"[Warning] No triggers found for AlwaysFF at {block.Addr}");
@@ -227,7 +248,7 @@ public class StructuralElaborator
                     break;
 
                 case SvGenerateBlock gen:
-                    if (gen.Members != null) ProcessBehavioral(gen.Members, scope);
+                    if (gen.Members != null) ProcessBehavioral(gen.Members);
                     break;
 
                 case SvVariable:
@@ -242,7 +263,7 @@ public class StructuralElaborator
         }
     }
 
-    private List<(ISimLogicSignal sig, SvEdgeKind edge)> ResolveTriggers(IKind timing)
+    private List<(ISimLogicSignal sig, SvEdgeKind edge)> ResolveTriggers(IKind? timing)
     {
         var list = new List<(ISimLogicSignal sig, SvEdgeKind edge)>();
         if (timing is null) return list;
@@ -261,8 +282,8 @@ public class StructuralElaborator
                 break;
 
             case SvBinaryOp binOp:
-                list.AddRange(ResolveTriggers(binOp.Left!));
-                list.AddRange(ResolveTriggers(binOp.Right!));
+                list.AddRange(ResolveTriggers(binOp.Left));
+                list.AddRange(ResolveTriggers(binOp.Right));
                 break;
             case SvEventList eventList:
                 if (eventList.Events != null)
@@ -272,9 +293,11 @@ public class StructuralElaborator
                         list.AddRange(ResolveTriggers(item));
                     }
                 }
+
                 break;
             default:
-                try {
+                try
+                {
                     var rawSig = _exprElaborator.ResolveSignal(timing);
                     list.Add((rawSig, SvEdgeKind.None));
                 }
@@ -282,12 +305,37 @@ public class StructuralElaborator
                 {
                     // ignored
                 }
+
                 break;
         }
 
         return list;
     }
 
+    private static ISimLogicSignal CreateSignalForType(string? typeStr, int width)
+    {
+        var cleanType = ExpressionElaborator.ExtractCleanTypeName(typeStr);
+        if (!TypeRegistry.TryGetType(cleanType, out var def))
+            return width switch
+            {
+                <= 8 => new LogicVar<byte>(width, new SimLogic<byte>(0, 0)),
+                <= 16 => new LogicVar<ushort>(width, new SimLogic<ushort>(0, 0)),
+                <= 32 => new LogicVar<uint>(width, new SimLogic<uint>(0, 0)),
+                <= 64 => new LogicVar<ulong>(width, new SimLogic<ulong>(0, 0)),
+                <= 128 => new LogicVar<UInt128>(width, new SimLogic<UInt128>(0, 0)),
+                _ => new LogicVar<BigInteger>(width, new SimLogic<BigInteger>(0, 0)),
+            };
+
+        if (def.IsUnion)
+        {
+            var memberWidths = def.Fields.ToDictionary(k => k.Key, v => v.Value.Msb - v.Value.Lsb + 1);
+            return new PackedUnionVar(width, memberWidths, new SimLogic<BigInteger>(0, 0))
+                { StructTypeName = cleanType };
+        }
+
+        var layout = def.Fields.ToDictionary(k => k.Key, v => (v.Value.Msb, v.Value.Lsb));
+        return new PackedStructVar(width, layout, new SimLogic<BigInteger>(0, 0)) { StructTypeName = cleanType };
+    }
 
     private void BuildContinuousAssign<T>(LogicVar<T> lhs, IKind rhsAst) where T : IBinaryInteger<T>
     {
@@ -296,25 +344,62 @@ public class StructuralElaborator
         _ = new ContinuousAssignProcess<SimLogic<T>>(lhs, rhsExpr, _exprElaborator.Dependencies, _scheduler);
     }
 
-    private ISimLogicSignal ElaborateVariable(SvVariable ast, HierarchicalScope scope)
+    private ISimEventSource ElaborateVariable(SvVariable ast, HierarchicalScope scope)
     {
-        var width = ParseWidth(ast.Type);
+        var typeStr = ast.Type ?? "";
+        ISimEventSource simVar;
 
-        ISimLogicSignal simVar = width switch
+        if (typeStr.Contains("$[$]"))
         {
-            <= 8 => new LogicVar<byte>(width, new SimLogic<byte>(0, 0)),
-            <= 16 => new LogicVar<ushort>(width, new SimLogic<ushort>(0, 0)),
-            <= 32 => new LogicVar<uint>(width, new SimLogic<uint>(0, 0)),
-            <= 64 => new LogicVar<ulong>(width, new SimLogic<ulong>(0, 0)),
-            <= 128 => new LogicVar<UInt128>(width, new SimLogic<UInt128>(0, 0)),
-            _ => new LogicVar<BigInteger>(width, new SimLogic<BigInteger>(0, 0)),
-        };
-        
-        if (ast.Initializer != null)
+            var cleanType = typeStr.Replace("$[$]", "");
+            var q = new QueueVar<ISimLogicSignal>(() => CreateSignalForType(cleanType, ParseWidth(cleanType)))
+            {
+                ElementTypeName = ExpressionElaborator.ExtractCleanTypeName(cleanType)
+            };
+            simVar = q;
+        }
+        else if (typeStr.Contains("$[]"))
         {
-            _exprElaborator.ClearDependencies();
-            var initVal = _exprElaborator.ElaborateExpression<BigInteger>(ast.Initializer).Evaluate();
-            simVar.AssignFromBigInteger(initVal.Value, initVal.Unknown);
+            var cleanType = typeStr.Replace("$[]", "");
+            var dyn = new DynamicArrayVar<ISimLogicSignal>(() => CreateSignalForType(cleanType, ParseWidth(cleanType)))
+            {
+                ElementTypeName = ExpressionElaborator.ExtractCleanTypeName(cleanType)
+            };
+            simVar = dyn;
+        }
+        else if (typeStr.Contains("$["))
+        {
+            var cleanType = typeStr[..typeStr.IndexOf("$[", StringComparison.Ordinal)];
+            var aa = new AssociativeArrayVar<BigInteger, ISimLogicSignal>(() =>
+                CreateSignalForType(cleanType, ParseWidth(cleanType)))
+            {
+                ElementTypeName = ExpressionElaborator.ExtractCleanTypeName(cleanType)
+            };
+            simVar = aa;
+        }
+        else
+        {
+            var width = ParseWidth(typeStr);
+            var sig = CreateSignalForType(typeStr, width);
+
+            if (ast.Initializer != null)
+            {
+                _exprElaborator.ClearDependencies();
+                var initVal = _exprElaborator.ElaborateExpression<BigInteger>(ast.Initializer).Evaluate();
+                sig.AssignFromBigInteger(initVal.Value, initVal.Unknown);
+            }
+
+            simVar = sig;
+        }
+
+        if (!string.IsNullOrEmpty(ast.Type))
+        {
+            var typeParts = ast.Type.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (typeParts.Length > 0 && long.TryParse(typeParts[0], out var typeId))
+            {
+                if (simVar is ISimLogicSignal logicSig)
+                    logicSig.EnumTypeId = typeId;
+            }
         }
 
         scope.AddSignal(ast.Name!, simVar);
@@ -324,7 +409,13 @@ public class StructuralElaborator
 
     private void ElaborateTask(SvSubroutine ast, HierarchicalScope scope)
     {
+        var taskScope = new HierarchicalScope(ast.Name ?? "unnamed_task", scope);
         var taskArgs = new List<ISimLogicSignal>();
+
+        if (ast.Members != null)
+        {
+            ProcessMembers(ast.Members, taskScope);
+        }
 
         if (ast.Arguments != null)
         {
@@ -333,17 +424,9 @@ public class StructuralElaborator
                 var arg = (SvFormalArgument)kind;
                 var width = ParseWidth(arg.Type);
 
-                ISimLogicSignal simVar = width switch
-                {
-                    <= 8 => new LogicVar<byte>(width, new SimLogic<byte>(0, 0)),
-                    <= 16 => new LogicVar<ushort>(width, new SimLogic<ushort>(0, 0)),
-                    <= 32 => new LogicVar<uint>(width, new SimLogic<uint>(0, 0)),
-                    <= 64 => new LogicVar<ulong>(width, new SimLogic<ulong>(0, 0)),
-                    <= 128 => new LogicVar<UInt128>(width, new SimLogic<UInt128>(0, 0)),
-                    _ => new LogicVar<BigInteger>(width, new SimLogic<BigInteger>(0, 0)),
-                };
+                var simVar = CreateSignalForType(arg.Type, width);
 
-                scope.AddSignal(arg.Name!, simVar);
+                taskScope.AddSignal(arg.Name!, simVar);
                 _exprElaborator.RegisterSignal(arg.Addr, simVar);
                 taskArgs.Add(simVar);
             }
@@ -451,23 +534,320 @@ public class StructuralElaborator
         }
     }
 
+    private static void TryRegisterTypedefOrAlias(IKind member)
+    {
+        var type = member.GetType();
+        if (!type.Name.Contains("TypeAlias") && !type.Name.Contains("Typedef")) return;
+
+        var nameProp = type.GetProperty("Name");
+        var targetProp = type.GetProperty("Target");
+
+        if (nameProp == null || targetProp == null) return;
+
+        var name = nameProp.GetValue(member) as string;
+        var target = targetProp.GetValue(member) as string;
+
+        if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(target)) return;
+
+        ParseAndRegisterTypeString(name, target);
+    }
+
+    private static void ParseAndRegisterTypeString(string typeName, string target)
+    {
+        var isUnion = target.StartsWith("union");
+        var isStruct = target.StartsWith("struct");
+        if (!isUnion && !isStruct) return;
+
+        var openBrace = target.IndexOf('{');
+        var closeBrace = target.LastIndexOf('}');
+        if (openBrace == -1 || closeBrace == -1) return;
+
+        var inner = target.Substring(openBrace + 1, closeBrace - openBrace - 1);
+        var fields = ParseFieldsFromInnerString(inner);
+
+        var finalFields = new Dictionary<string, (int Msb, int Lsb, string SubType)>();
+        int currentBitOffset = 0;
+
+        for (int i = fields.Count - 1; i >= 0; i--)
+        {
+            var f = fields[i];
+            var fWidth = ParseWidth(f.Type);
+
+            if (isUnion)
+            {
+                finalFields[f.Name] = (fWidth - 1, 0, f.SubTypeName);
+            }
+            else
+            {
+                finalFields[f.Name] = (currentBitOffset + fWidth - 1, currentBitOffset, f.SubTypeName);
+                currentBitOffset += fWidth;
+            }
+        }
+
+        TypeRegistry.Register(typeName, new TypeDefinition
+        {
+            Name = typeName,
+            IsStruct = isStruct,
+            IsUnion = isUnion,
+            IsPacked = true, // We map unpacked structs locally as huge Packed structs right now for structural compatibility
+            Fields = finalFields
+        });
+    }
+
+    private class ParsedField
+    {
+        public string Type { get; init; } = "";
+        public string Name { get; init; } = "";
+        public string SubTypeName { get; init; } = "";
+    }
+
+    private static List<ParsedField> ParseFieldsFromInnerString(string inner)
+    {
+        var fields = new List<ParsedField>();
+        var braceDepth = 0;
+        var lastStart = 0;
+
+        for (var i = 0; i < inner.Length; i++)
+        {
+            var c = inner[i];
+            switch (c)
+            {
+                case '{':
+                    braceDepth++;
+                    break;
+                case '}':
+                    braceDepth--;
+                    break;
+                case ';' when braceDepth == 0:
+                {
+                    var fieldStr = inner.Substring(lastStart, i - lastStart).Trim();
+                    if (!string.IsNullOrEmpty(fieldStr))
+                    {
+                        fields.Add(ParseSingleFieldString(fieldStr));
+                    }
+
+                    lastStart = i + 1;
+                    break;
+                }
+            }
+        }
+
+        if (lastStart >= inner.Length) return fields;
+        {
+            var fieldStr = inner[lastStart..].Trim();
+            if (!string.IsNullOrEmpty(fieldStr))
+            {
+                fields.Add(ParseSingleFieldString(fieldStr));
+            }
+        }
+
+        return fields;
+    }
+
+    private static ParsedField ParseSingleFieldString(string fieldStr)
+    {
+        fieldStr = fieldStr.Trim();
+        var lastSpace = fieldStr.LastIndexOf(' ');
+        if (lastSpace == -1) return new ParsedField { Type = fieldStr, Name = fieldStr, SubTypeName = fieldStr };
+
+        var typePart = fieldStr[..lastSpace].Trim();
+        var namePart = fieldStr[(lastSpace + 1)..].Trim();
+
+        var subTypeName = typePart;
+        if (typePart.StartsWith("struct") || typePart.StartsWith("union"))
+        {
+            subTypeName = namePart + "_t";
+            ParseAndRegisterTypeString(subTypeName, typePart);
+        }
+
+        return new ParsedField
+        {
+            Type = typePart,
+            Name = namePart,
+            SubTypeName = subTypeName
+        };
+    }
+
+    private static void RegisterPackedStruct(SvPackedStructType pst) => RegisterPackedStructWithAlias(pst.Name!, pst);
+
+    private static void RegisterPackedStructWithAlias(string aliasName, SvPackedStructType pst)
+    {
+        var fields = new Dictionary<string, (int Msb, int Lsb, string SubType)>();
+        var currentBitOffset = 0;
+
+        var members = GetMembersOfRecord(pst);
+        if (members == null) return;
+
+        for (var i = members.Count - 1; i >= 0; i--)
+        {
+            var m = members[i];
+            if (m is not SvVariable fieldVar) continue;
+            var fWidth = ParseWidth(fieldVar.Type);
+            var cleanSubType = ExpressionElaborator.ExtractCleanTypeName(fieldVar.Type);
+
+            fields[fieldVar.Name!] = (currentBitOffset + fWidth - 1, currentBitOffset, cleanSubType);
+            currentBitOffset += fWidth;
+        }
+
+        TypeRegistry.Register(aliasName, new TypeDefinition
+        {
+            Name = aliasName,
+            IsStruct = true,
+            IsUnion = false,
+            IsPacked = true,
+            Fields = fields
+        });
+    }
+
+    private static void RegisterPackedUnion(SvPackedUnionType put) => RegisterPackedUnionWithAlias(put.Name!, put);
+
+    private static void RegisterPackedUnionWithAlias(string aliasName, SvPackedUnionType put)
+    {
+        var fields = new Dictionary<string, (int Msb, int Lsb, string SubType)>();
+        var members = GetMembersOfRecord(put);
+        if (members == null) return;
+
+        foreach (var m in members)
+        {
+            if (m is not SvVariable fieldVar) continue;
+            var fWidth = ParseWidth(fieldVar.Type);
+            var cleanSubType = ExpressionElaborator.ExtractCleanTypeName(fieldVar.Type);
+
+            fields[fieldVar.Name!] = (fWidth - 1, 0, cleanSubType);
+        }
+
+        TypeRegistry.Register(aliasName, new TypeDefinition
+        {
+            Name = aliasName,
+            IsStruct = false,
+            IsUnion = true,
+            IsPacked = true,
+            Fields = fields
+        });
+    }
+
+    private static void RegisterUnpackedStruct(SvUnpackedStructType ust) =>
+        RegisterUnpackedStructWithAlias(ust.Name!, ust);
+
+    private static void RegisterUnpackedStructWithAlias(string aliasName, SvUnpackedStructType ust)
+    {
+        var fields = new Dictionary<string, (int Msb, int Lsb, string SubType)>();
+        var members = GetMembersOfRecord(ust);
+        if (members == null) return;
+
+        foreach (var m in members)
+        {
+            if (m is not SvVariable fieldVar) continue;
+            var cleanSubType = ExpressionElaborator.ExtractCleanTypeName(fieldVar.Type);
+            fields[fieldVar.Name!] = (0, 0, cleanSubType);
+        }
+
+        TypeRegistry.Register(aliasName, new TypeDefinition
+        {
+            Name = aliasName,
+            IsStruct = true,
+            IsUnion = false,
+            IsPacked = false,
+            Fields = fields
+        });
+    }
+
+    private static void RegisterUnpackedUnion(SvUnpackedUnionType uut) =>
+        RegisterUnpackedUnionWithAlias(uut.Name!, uut);
+
+    private static void RegisterUnpackedUnionWithAlias(string aliasName, SvUnpackedUnionType uut)
+    {
+        var fields = new Dictionary<string, (int Msb, int Lsb, string SubType)>();
+        var members = GetMembersOfRecord(uut);
+        if (members == null) return;
+
+        foreach (var m in members)
+        {
+            if (m is not SvVariable fieldVar) continue;
+            var cleanSubType = ExpressionElaborator.ExtractCleanTypeName(fieldVar.Type);
+            fields[fieldVar.Name!] = (0, 0, cleanSubType);
+        }
+
+        TypeRegistry.Register(aliasName, new TypeDefinition
+        {
+            Name = aliasName,
+            IsStruct = false,
+            IsUnion = true,
+            IsPacked = false,
+            Fields = fields
+        });
+    }
+
+    private static List<IKind>? GetMembersOfRecord(IKind recordNode)
+    {
+        var prop = recordNode.GetType().GetProperty("Members") ?? recordNode.GetType().GetProperty("Fields");
+        if (prop == null) return null;
+
+        var value = prop.GetValue(recordNode);
+        switch (value)
+        {
+            case List<IKind> list:
+                return list;
+            case IKind[] array:
+                return array.ToList();
+            case System.Collections.IEnumerable enumerable:
+            {
+                var result = new List<IKind>();
+                foreach (var item in enumerable)
+                {
+                    if (item is IKind kind) result.Add(kind);
+                }
+
+                return result;
+            }
+            default:
+                return null;
+        }
+    }
 
     private static int ParseWidth(string? typeStr)
     {
         if (string.IsNullOrEmpty(typeStr)) return 32;
-        switch (typeStr)
+
+        var cleanType = ExpressionElaborator.ExtractCleanTypeName(typeStr);
+
+        if (TypeRegistry.TryGetType(cleanType, out var def))
+        {
+            return def.Fields.Values.Max(x => x.Msb) + 1;
+        }
+
+        if (EnumRegistry.EnumWidths.TryGetValue(cleanType, out var enumWidth))
+        {
+            return enumWidth;
+        }
+
+        switch (cleanType)
         {
             case "int":
                 return 32;
             case "logic":
             case "bit":
                 return 1;
+            case "string":
+                return 2048; // Allocate up to 256 characters for strings to prevent memory truncation in mapping
         }
 
         var start = typeStr.IndexOf('[');
-        var colon = typeStr.IndexOf(':');
-        if (start == -1 || colon == -1) return 32;
-        var msb = int.Parse(typeStr.Substring(start + 1, colon - start - 1));
-        return msb + 1;
+        if (start == -1) return 32;
+
+        var colon = typeStr.IndexOf(':', start);
+        if (colon == -1)
+        {
+            var end = typeStr.IndexOf(']', start);
+            if (end != -1 && int.TryParse(typeStr.AsSpan(start + 1, end - start - 1), out var singleDim))
+            {
+                return singleDim;
+            }
+
+            return 32;
+        }
+
+        var msbStr = typeStr.Substring(start + 1, colon - start - 1).Trim();
+        return int.TryParse(msbStr, out var msb) ? msb + 1 : 32;
     }
 }

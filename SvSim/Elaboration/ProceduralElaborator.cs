@@ -71,14 +71,7 @@ public class ProceduralElaborator(
 
     private BlockStatement ElaborateVariableDeclaration(SvVariableDeclaration decl)
     {
-        var addr = ExpressionElaborator.ExtractId(decl.Symbol);
-        
-        if (exprElab.GetSignal(addr) != null)
-            return new BlockStatement([]);
-
-        var simVar = new LogicVar<uint>(32, 0);
-        exprElab.RegisterSignal(addr, simVar);
-        return new BlockStatement([]);
+        return new BlockStatement([]); // Handled structurally by ProcessMembers via scope
     }
 
     private IfStatement ElaborateConditional(SvConditional condAst)
@@ -138,6 +131,14 @@ public class ProceduralElaborator(
 
     private IStatement ElaborateAssignment(SvAssignment assignAst)
     {
+        if (assignAst.Right is SvNewArray newArr)
+        {
+            var targetObj = exprElab.ResolveRawObject(assignAst.Left!);
+            var sizeExpr = exprElab.ElaborateExpression<uint>(newArr.SizeExpr!);
+
+            return new NewArrayStatement(targetObj, sizeExpr);
+        }
+
         return assignAst.Left switch
         {
             SvNamedValue namedVal => BuildStandardAssign(namedVal.Symbol!, assignAst),
@@ -174,15 +175,26 @@ public class ProceduralElaborator(
 
     private IStatement BuildAssignInternal(ISimLogicSignal sig, SvAssignment assignAst)
     {
-        return sig.BitWidth switch
+        var type = sig.GetType();
+        if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(LogicVar<>))
         {
-            <= 8 => BuildAssign((LogicVar<byte>)sig, assignAst),
-            <= 16 => BuildAssign((LogicVar<ushort>)sig, assignAst),
-            <= 32 => BuildAssign((LogicVar<uint>)sig, assignAst),
-            <= 64 => BuildAssign((LogicVar<ulong>)sig, assignAst),
-            <= 128 => BuildAssign((LogicVar<UInt128>)sig, assignAst),
-            _ => BuildAssign((LogicVar<BigInteger>)sig, assignAst)
-        };
+            return sig.BitWidth switch
+            {
+                <= 8 => BuildAssign((LogicVar<byte>)sig, assignAst),
+                <= 16 => BuildAssign((LogicVar<ushort>)sig, assignAst),
+                <= 32 => BuildAssign((LogicVar<uint>)sig, assignAst),
+                <= 64 => BuildAssign((LogicVar<ulong>)sig, assignAst),
+                <= 128 => BuildAssign((LogicVar<UInt128>)sig, assignAst),
+                _ => BuildAssign((LogicVar<BigInteger>)sig, assignAst)
+            };
+        }
+
+        // Catch-all for SliceSignal, PackedStructs, and Unions mapped as generic ISimLogicSignals
+        var rhsExpr = exprElab.ElaborateExpression<BigInteger>(assignAst.Right!);
+        if (assignAst.IsNonBlocking)
+            return new NbaGeneralAssignStatement(sig, rhsExpr, scheduler);
+
+        return new GeneralAssignStatement(sig, rhsExpr);
     }
 
     private IStatement BuildSliceAssign(SvRangeSelect rangeAst, SvAssignment assignAst)
@@ -202,14 +214,30 @@ public class ProceduralElaborator(
 
     private IStatement BuildBitAssign(SvElementSelect bitAst, SvAssignment assignAst)
     {
-        var sig = exprElab.ResolveSignal(bitAst.Value!);
-        var index = ExpressionElaborator.EvaluateConstantInt(bitAst.Selector!);
+        var targetObj = exprElab.ResolveRawObject(bitAst.Value!);
+        var indexExpr = exprElab.ElaborateExpression<BigInteger>(bitAst.Selector!);
         var rhsExpr = exprElab.ElaborateExpression<BigInteger>(assignAst.Right!);
 
-        if (assignAst.IsNonBlocking)
-            return new NbaSliceAssignStatement(sig, index, index, rhsExpr, scheduler);
+        if (targetObj is AssociativeArrayVar<BigInteger, ISimLogicSignal> aa)
+        {
+            return new AssociativeArrayAssignStatement(aa, indexExpr, rhsExpr);
+        }
 
-        return new SliceAssignStatement(sig, index, index, rhsExpr);
+        if (targetObj is DynamicArrayVar<ISimLogicSignal> dyn)
+        {
+            return new DynamicArrayAssignStatement(dyn, indexExpr, rhsExpr);
+        }
+
+        if (targetObj is QueueVar<ISimLogicSignal> queue)
+        {
+            return new QueueAssignStatement(queue, indexExpr, rhsExpr);
+        }
+
+        var sig = exprElab.ResolveSignal(bitAst.Value!);
+        if (assignAst.IsNonBlocking)
+            return new NbaBitAssignStatement(sig, indexExpr, rhsExpr, scheduler);
+
+        return new BitAssignStatement(sig, indexExpr, rhsExpr);
     }
 
     private IStatement BuildAssign<T>(LogicVar<T> lhs, SvAssignment assignAst) where T : IBinaryInteger<T>
@@ -241,7 +269,7 @@ public class ProceduralElaborator(
         return new ConcatAssignStatement(targetSignals.ToArray(), rhsExpr);
     }
 
-private IStatement ElaborateCall(SvCall callAst)
+    private IStatement ElaborateCall(SvCall callAst)
     {
         var taskName = callAst.Subroutine;
         if (!string.IsNullOrEmpty(taskName))
@@ -252,8 +280,21 @@ private IStatement ElaborateCall(SvCall callAst)
                 var callerArgs = new List<IExpression<SimLogic<BigInteger>>>();
                 if (callAst.Arguments != null)
                     callerArgs.AddRange(callAst.Arguments.Select(exprElab.ElaborateExpression<BigInteger>));
-                
+
                 return new TaskCallStatement(compiledTask.body, compiledTask.args, callerArgs);
+            }
+
+            if (taskName is "push_back" or "push_front" or "pop_back" or "pop_front" or "delete")
+            {
+                var targetObj = exprElab.ResolveRawObject(callAst.Arguments![0]);
+
+                var args = new List<IExpression<SimLogic<BigInteger>>>();
+                for (var i = 1; i < callAst.Arguments.Length; i++)
+                {
+                    args.Add(exprElab.ElaborateExpression<BigInteger>(callAst.Arguments[i]));
+                }
+
+                return new ArrayMethodStatement(targetObj, taskName, args);
             }
         }
 
