@@ -1,5 +1,7 @@
-﻿using SvSim.SlangAstParser.AstTree.Expression;
+﻿using System.Text.Json.Serialization;
+using SvSim.SlangAstParser.AstTree.Expression;
 using SvSim.SlangAstParser.AstTree.SvEnums;
+using SvSim.SlangAstParser.AstTree.Symbol.Type;
 using SvSim.SlangAstParser.AstTree.TimingControl;
 
 namespace SvSim.SlangAstParser.AstTree.Symbol.ValueSymbol.VariableSymbol;
@@ -11,6 +13,7 @@ public record SvVariable : ISvVariableSymbol
     public required string Name { get; init; }
     public long Addr { get; init; }
     public string? Type { get; init; }
+    [JsonIgnore] public ISvType? ResolvedType { get; set; }
     public SvVariableLifetime? Lifetime { get; init; }
     public ISvExpression? Initializer { get; init; }
     public string? Kind { get; init; }
@@ -23,6 +26,7 @@ public record SvClassProperty : ISvVariableSymbol
     public required string Name { get; init; }
     public long Addr { get; init; }
     public string? Type { get; init; }
+    [JsonIgnore] public ISvType? ResolvedType { get; set; }
     public SvVariableLifetime? Lifetime { get; init; }
     public SvVisibility? Visibility { get; init; }
     public SvRandMode? RandMode { get; init; }
@@ -36,6 +40,7 @@ public record SvClockVar : ISvVariableSymbol
     public required string Name { get; init; }
     public long Addr { get; init; }
     public string? Type { get; init; }
+    [JsonIgnore] public ISvType? ResolvedType { get; set; }
     public ISvExpression? Initializer { get; init; }
     public SvVariableLifetime? Lifetime { get; init; }
     public SvArgumentDirection? Direction { get; init; }
@@ -53,6 +58,7 @@ public record SvField : ISvVariableSymbol
     public required string Name { get; init; }
     public long Addr { get; init; }
     public string? Type { get; init; }
+    [JsonIgnore] public ISvType? ResolvedType { get; set; }
     public string? Kind { get; init; }
 }
 
@@ -61,6 +67,7 @@ public record SvFormalArgument : ISvVariableSymbol
     public required string Name { get; init; }
     public long Addr { get; init; }
     public string? Type { get; init; }
+    [JsonIgnore] public ISvType? ResolvedType { get; set; }
     public SvVariableLifetime? Lifetime { get; init; }
     public SvArgumentDirection? Direction { get; init; }
     public ISvExpression? DefaultValue { get; init; }

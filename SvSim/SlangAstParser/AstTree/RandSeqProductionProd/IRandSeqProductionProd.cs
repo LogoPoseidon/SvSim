@@ -1,5 +1,6 @@
 ﻿using System.Text.Json.Serialization;
 using SvSim.SlangAstParser.AstTree.Expression;
+using SvSim.SlangAstParser.AstTree.Symbol;
 
 namespace SvSim.SlangAstParser.AstTree.RandSeqProductionProd;
 
@@ -20,6 +21,7 @@ public record SvRandSeqItem : IRandSeqProductionProd
 public record RandSeqItemDetails
 {
     public string? Target { get; init; }
+    [JsonIgnore] public SvRandSeqProduction? ResolvedTarget { get; set; }
     public required ISvExpression[] Args { get; init; }
 }
 

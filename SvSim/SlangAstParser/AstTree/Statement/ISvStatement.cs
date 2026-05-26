@@ -108,6 +108,7 @@ public record SvBlock : ISvStatement
 public record SvVariableDeclaration : ISvStatement
 {
     public required string Symbol { get; init; }
+    [JsonIgnore] public ISvSymbol? ResolvedSymbol { get; set; }
     public string? Kind { get; init; }
 }
 
@@ -266,6 +267,7 @@ public record RandCaseItem(ISvExpression Expr, ISvStatement Stmt);
 public record SvRandSequence : ISvStatement
 {
     public required string FirstProduction { get; init; }
+    [JsonIgnore] public SvRandSeqProduction? ResolvedFirstProduction { get; set; }
     public string? Kind { get; init; }
 }
 

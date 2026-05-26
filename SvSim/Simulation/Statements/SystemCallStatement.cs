@@ -41,7 +41,6 @@ public partial class SystemCallStatement(
 
                 scheduler.OnPostponedStep += monitorEv.CheckMonitor;
 
-                // Schedule the initial print immediately at the end of the current time step
                 scheduler.Schedule(EventRegion.Postponed, monitorEv);
                 break;
             case "$info":
@@ -124,6 +123,9 @@ public partial class SystemCallStatement(
             
             formatted = ReplaceFirst(formatted, specifier, replacement);
         }
+
+        formatted = formatted.Replace("%%", "%");
+
         return formatted;
     }
 
@@ -174,7 +176,7 @@ public partial class SystemCallStatement(
         return text[..pos] + replace + text[(pos + search.Length)..];
     }
 
-    [System.Text.RegularExpressions.GeneratedRegex("%[0-9]*[a-zA-Z]")]
+    [System.Text.RegularExpressions.GeneratedRegex("%[0-9.]*[a-zA-Z]")]
     private static partial System.Text.RegularExpressions.Regex FormatSpecifierRegex();
     
     private class StrobeEvent(string formatted, List<IExpression<SimLogic<BigInteger>>> args) : ISimEvent

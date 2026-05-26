@@ -1,5 +1,6 @@
 ﻿using SvSim.SlangAstParser.AstTree.Expression;
 using SvSim.SlangAstParser.AstTree.SvEnums;
+using SvSim.SlangAstParser.AstTree.Symbol;
 
 namespace SvSim.SlangAstParser.AstTree.BinsSelectExpr;
 
@@ -19,11 +20,14 @@ public record SvCrossId : ISvBinsSelectExpr
 {
     public required string Cross { get; init; }
     public string[]? Id { get; init; }
+    [JsonIgnore] public SvCoverpoint[]? ResolvedId { get; set; }
     public string? Kind { get; init; }
+    [JsonIgnore] public SvCoverCross? ResolvedCross { get; set; }
 }
 public record SvCondition : ISvBinsSelectExpr
 {
     public required string Target { get; init; }
+    [JsonIgnore] public ISvSymbol? ResolvedTarget { get; set; }
     public IReadOnlyList<ISvExpression>? Intersects { get; init; }
     public string? Kind { get; init; }
 }

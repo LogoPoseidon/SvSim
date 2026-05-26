@@ -9,18 +9,6 @@ namespace SvSim.SlangAstParser.Tests;
 [TestFixture]
 public class AstIntegrationTests
 {
-    private static readonly JsonSerializerOptions SerializerOptions = new()
-    {
-        PropertyNameCaseInsensitive = true,
-        AllowOutOfOrderMetadataProperties = true, 
-        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
-        Converters =
-        {
-            new JsonStringEnumConverter<SvVariableFlags>(JsonNamingPolicy.SnakeCaseLower),
-            new JsonStringEnumConverter(),
-            new SvInstanceBodyConverter()
-        }
-    };
 
     private static string[] GetAstJsonFiles()
     {
@@ -40,7 +28,7 @@ public class AstIntegrationTests
 
         Assert.DoesNotThrow(() =>
             {
-                var result = JsonSerializer.Deserialize<TopLevel>(jsonContent, SerializerOptions);
+                var result = SlangSerializer.Parse(jsonContent);
 
                 Assert.That(result, Is.Not.Null, "Deserialization returned null.");
             }, $"Failed to parse JSON file: {Path.GetFileName(jsonFilePath)}");

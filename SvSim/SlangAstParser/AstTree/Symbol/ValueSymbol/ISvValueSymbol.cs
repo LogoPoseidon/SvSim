@@ -1,5 +1,7 @@
-﻿using SvSim.SlangAstParser.AstTree.Expression;
+﻿using System.Text.Json.Serialization;
+using SvSim.SlangAstParser.AstTree.Expression;
 using SvSim.SlangAstParser.AstTree.SvEnums;
+using SvSim.SlangAstParser.AstTree.Symbol.Type;
 using SvSim.SlangAstParser.AstTree.TimingControl;
 
 namespace SvSim.SlangAstParser.AstTree.Symbol.ValueSymbol;
@@ -20,8 +22,10 @@ public record SvModportPort : ISvValueSymbol
     public required string Name { get; init; }
     public long Addr { get; init; }
     public string? Type { get; init; }
+    [JsonIgnore] public ISvType? ResolvedType { get; set; }
     public SvArgumentDirection? Direction { get; init; }
     public string? InternalSymbol { get; init; }
+    [JsonIgnore] public ISvSymbol? ResolvedInternalSymbol { get; set; }
     public string? Kind { get; init; }
 }
 
@@ -30,6 +34,7 @@ public record SvNet : ISvValueSymbol
     public required string Name { get; init; }
     public long Addr { get; init; }
     public string? Type { get; init; }
+    [JsonIgnore] public ISvType? ResolvedType { get; set; }
     public SvNetType? NetType { get; init; }
     public ISvExpression? Initializer { get; init; }
     public bool IsImplicit { get; init; }
@@ -43,6 +48,7 @@ public record SvParameter : ISvValueSymbol // TODO ParameterSymbolBase
     public required string Name { get; init; }
     public long Addr { get; init; }
     public string? Type { get; init; }
+    [JsonIgnore] public ISvType? ResolvedType { get; set; }
     public ISvExpression? Initializer { get; init; }
     public string? Value { get; init; }
     public bool IsLocal { get; init; }
@@ -56,6 +62,7 @@ public record SvPrimitivePort : ISvValueSymbol
     public required string Name { get; init; }
     public long Addr { get; init; }
     public string? Type { get; init; }
+    [JsonIgnore] public ISvType? ResolvedType { get; set; }
     public SvPrimitiveDirection? Direction { get; init; }
     public string? Kind { get; init; }
 }
@@ -65,6 +72,7 @@ public record SvSpecparam : ISvValueSymbol
     public required string Name { get; init; }
     public long Addr { get; init; }
     public string? Type { get; init; }
+    [JsonIgnore] public ISvType? ResolvedType { get; set; }
     public ISvExpression? Initializer { get; init; }
     public bool IsPathPulse { get; init; }
     public string? Value { get; init; }

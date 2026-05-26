@@ -9,7 +9,7 @@ namespace SvSim.SlangAstParser.Serializer
         private static readonly JsonSerializerOptions SerializerOptions = new()
         {
             PropertyNameCaseInsensitive = true,
-            AllowOutOfOrderMetadataProperties = true, 
+            AllowOutOfOrderMetadataProperties = true,
             UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
             Converters =
             {
@@ -18,11 +18,15 @@ namespace SvSim.SlangAstParser.Serializer
                 new SvInstanceBodyConverter()
             }
         };
-        public static TopLevel? Parse(string json)
+
+        public static TopLevel Parse(string json)
         {
-        
-            return JsonSerializer.Deserialize<TopLevel>(json, SerializerOptions);
+            var topLevel = JsonSerializer.Deserialize<TopLevel>(json, SerializerOptions) ??
+                           throw new JsonException("Failed to deserialize top level or no module given");
+
+            SlangAstResolver.Resolve(topLevel);
+
+            return topLevel;
         }
-    
     }
 }

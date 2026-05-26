@@ -224,9 +224,16 @@ public record SvCoverCross : ISvSymbol, ISvScope
     public CoverOption[]? Options { get; init; }
     public string? Kind { get; init; }
 }
-public record CoverOption(ISvExpression Expr);
+public record CoverOption
+{
+    public required ISvExpression Expr { get; init; }
+}
 
-public record CoverCrossTarget(string Coverpoint);
+public record CoverCrossTarget()
+{
+    public required string Coverpoint { get; init; }
+    [JsonIgnore] public SvCoverpoint? ResolvedCoverpoint { get; set; }
+}
 
 public record SvCoverageBin : ISvSymbol
 {
@@ -269,6 +276,7 @@ public record SvDefParam : ISvSymbol
     public string? Target { get; init; }
     public ISvExpression? Value { get; init; }
     public string? Kind { get; init; }
+    [JsonIgnore] public ISvSymbol? ResolvedTarget { get; set; }
 }
 
 public record SvDefinition : ISvSymbol
@@ -311,6 +319,7 @@ public record SvExplicitImport : ISvSymbol
     public required string Name { get; init; }
     public long Addr { get; init; }
     public string? Package { get; init; }
+    [JsonIgnore] public SvPackage? ResolvedPackage { get; set; }
     public string? Kind { get; init; }
 }
 
@@ -372,6 +381,7 @@ public record SvInstanceBody : ISvSymbol, ISvScope
     public long Addr { get; init; }
     public ISvSymbol[]? Members { get; init; }
     public required string Definition { get; init; }
+    [JsonIgnore] public SvDefinition? ResolvedDefinition { get; set; }
     public string? Kind { get; init; }
 }
 public record SvInterfacePort : ISvSymbol
@@ -380,6 +390,8 @@ public record SvInterfacePort : ISvSymbol
     public long Addr { get; init; }
     public string? InterfaceDef { get; init; }
     public string? Modport { get; init; }
+    [JsonIgnore] public SvDefinition? ResolvedInterfaceDef { get; set; }
+    [JsonIgnore] public SvModport? ResolvedModport { get; set; }
     public bool IsGeneric { get; init; }
     public string? Kind { get; init; }
 }
@@ -416,6 +428,7 @@ public record SvModportClocking : ISvSymbol
     public required string Name { get; init; }
     public long Addr { get; init; }
     public string? Target { get; init; }
+    [JsonIgnore] public SvClockingBlock? ResolvedTarget { get; set; }
     public string? Kind { get; init; }
 }
 public record SvModport : ISvSymbol, ISvScope
@@ -435,7 +448,14 @@ public record SvMultiPort : ISvSymbol
     public MultiPortConnection[]? Ports { get; init; }
     public string? Kind { get; init; }
 }
-public record MultiPortConnection(string Type, string Direction, string InternalSymbol);
+
+public record MultiPortConnection
+{
+    public required string Type { get; init; }
+    public required string Direction { get; init; }
+    public required string InternalSymbol { get; init; }
+    [JsonIgnore] public ISvSymbol? ResolvedInternalSymbol { get; set; }
+};
 
 public record SvNetAlias : ISvSymbol
 {
@@ -449,8 +469,10 @@ public record SvNetType : ISvSymbol
     public required string Name { get; init; }
     public long Addr { get; init; }
     public string? Type { get; init; }
+    [JsonIgnore] public ISvType? ResolvedType { get; set; }
     public SvNetKind? NetKind { get; init; }
     public string? ResolutionFunction { get; init; }
+    [JsonIgnore] public SvSubroutine? ResolvedResolutionFunction { get; set; }
     public string? Kind { get; init; }
 }
 public record SvPackage : ISvSymbol, ISvScope
@@ -466,8 +488,10 @@ public record SvPort : ISvSymbol
     public required string Name { get; init; }
     public long Addr { get; init; }
     public string? Type { get; init; }
+    [JsonIgnore] public ISvType? ResolvedType { get; set; }
     public SvArgumentDirection? Direction { get; init; }
     public string? InternalSymbol { get; init; }
+    [JsonIgnore] public ISvSymbol? ResolvedInternalSymbol { get; set; }
     public bool IsNullPort { get; init; }
     public ISvExpression? Initializer { get; init; }
     public SvAttribute[]? Attributes { get; init; }
@@ -602,6 +626,7 @@ public record SvWildcardImport : ISvSymbol
     public string? Kind { get; init; }
     public bool IsFromExport { get; init; }
     public string? Package { get; init; }
+    [JsonIgnore] public SvPackage? ResolvedPackage { get; set; }
 }
 public record SvUnknown : ISvSymbol
 {
@@ -617,6 +642,7 @@ public record SvUninstantiatedDef : ISvSymbol
     public required string[] PortNames { get; init; }
     public bool IsChecker { get; init; }
     public required string DefinitionName { get; init; }
+    [JsonIgnore] public SvDefinition? ResolvedDefinition { get; set; }
     public required string ParamExpressions { get; init; }
     public string? Kind { get; init; }
 }
@@ -625,6 +651,7 @@ public record SvTypeParameter : ISvSymbol
     public required string Name { get; init; }
     public long Addr { get; init; }
     public string? Type { get; init; }
+    [JsonIgnore] public ISvType? ResolvedType { get; set; }
     public bool IsLocal { get; init; }
     public bool IsPort { get; init; }
     public bool IsBody { get; init; }

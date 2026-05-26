@@ -15,6 +15,7 @@ public record SvEnum : ISvIntegralType, ISvScope
     public required string Name { get; init; }
     public long Addr { get; init; }
     public ISvSymbol[]? Members { get; init; }
+    [JsonIgnore] public ISvType? ResolvedBaseType { get; set; }
     public string? BaseType { get; init; }
     public int? SystemId { get; init; }
     public long BitWidth { get; init; }

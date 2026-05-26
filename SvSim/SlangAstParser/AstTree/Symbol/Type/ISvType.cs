@@ -54,6 +54,7 @@ public record SvTypeAlias : ISvType
     public required string Name { get; init; }
     public long Addr { get; init; }
     public string? Target { get; init; }
+    [JsonIgnore] public ISvType? ResolvedTarget { get; set; }
     public SvVisibility Visibility { get; init; }
     public ISvSymbol? Forward { get; init; }
     public string? Kind { get; init; }
@@ -68,8 +69,11 @@ public record SvClassType : ISvType, ISvScope
     public bool IsInterface { get; init; }
     public bool IsFinal { get; init; }
     public string? BaseClass { get; init; }
+    [JsonIgnore] public SvClassType? ResolvedBaseClass { get; set; }
     public string[]? Implements { get; init; }
+    [JsonIgnore] public SvClassType[]? ResolvedImplements { get; set; }
     public string? GenericClass { get; init; }
+    [JsonIgnore] public SvGenericClassDef? ResolvedGenericClass { get; set; }
     public string? Kind { get; init; }
     public ISvExpression? BaseConstructorCall { get; init; }
     public ISvSymbol? Forward { get; init; }
@@ -244,6 +248,7 @@ public record SvVirtualInterfaceType : ISvType
     public long Addr { get; init; }
     public SvInstance? Iface { get; init; }
     public string? Modport { get; init; }
+    [JsonIgnore] public SvModport? ResolvedModport { get; set; }
     public bool IsRealIface { get; init; }
     public string? Kind { get; init; }
 }

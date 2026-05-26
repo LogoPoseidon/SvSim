@@ -1,14 +1,19 @@
-﻿using System.Numerics;
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Numerics;
 using SvSim.Simulation.Engine;
-using SvSim.SlangAstParser.AstTree;
-using SvSim.Simulation.Statements;
-using SvSim.Simulation.Signal;
 using SvSim.Simulation.Expressions;
+using SvSim.Simulation.Signal;
+using SvSim.Simulation.Statements;
+using SvSim.SlangAstParser.AstTree;
 using SvSim.SlangAstParser.AstTree.Expression;
-using SvSim.SlangAstParser.AstTree.Expressions;
-using SvSim.SlangAstParser.AstTree.Statements;
+using SvSim.SlangAstParser.AstTree.Expression.ValueExpressionBase;
+using SvSim.SlangAstParser.AstTree.Statement;
 using SvSim.SlangAstParser.AstTree.SvEnums;
-using SvSim.SlangAstParser.AstTree.TimingControls;
+using SvSim.SlangAstParser.AstTree.Symbol;
+using SvSim.SlangAstParser.AstTree.TimingControl;
+using SvConditional = SvSim.SlangAstParser.AstTree.Statement.SvConditional;
 
 namespace SvSim.Elaboration;
 
@@ -17,7 +22,7 @@ public class ProceduralElaborator(
     EventScheduler scheduler,
     Dictionary<string, (IStatement body, List<ISimLogicSignal> args)> compiledTasks)
 {
-    public IStatement ElaborateStatement(IKind ast)
+    public IStatement ElaborateStatement(ISvAstNode ast)
     {
         return ast switch
         {
@@ -32,18 +37,19 @@ public class ProceduralElaborator(
             SvTimed timedStmt => ElaborateTimed(timedStmt),
             SvConditional condAst => ElaborateConditional(condAst),
             SvForLoop forAst => ElaborateForLoop(forAst),
+            SvForeachLoop foreachAst => ElaborateForeachLoop(foreachAst),
             SvUnaryOp unary => ElaborateUnaryOpStmt(unary),
             SvCall call => ElaborateCall(call),
             SvBreak => new BreakStatement(),
             SvEmpty => new BlockStatement([]),
-            _ => throw new NotImplementedException($"{ast.GetType()} not implemented")
+            _ => throw new NotImplementedException($"{ast.GetType()} not implemented as procedural statement.")
         };
     }
 
     private BlockStatement ElaborateStatementBlock(SvStatementBlock block)
     {
         var stmts = new List<IStatement>();
-        if (block.Members != null) stmts.AddRange(block.Members.Select(ElaborateStatement));
+        if (block.Members != null) stmts.AddRange(block.Members.Select(m => ElaborateStatement(m)));
         return new BlockStatement(stmts);
     }
 
@@ -55,14 +61,14 @@ public class ProceduralElaborator(
             {
                 if (delay.Expr is not SvIntegerLiteral intLit)
                     throw new NotImplementedException(
-                        $"Unsupported timing control type: {timedAst.Timing?.GetType().Name}");
+                        $"Unsupported timing control delay type: {timedAst.Timing?.GetType().Name}");
                 var delayVal = ulong.Parse(intLit.Value!);
                 var innerStmt = ElaborateStatement(timedAst.Stmt!);
                 return new BlockStatement([new DelayStatement(delayVal), innerStmt]);
             }
             case SvSignalEvent eventControl:
             {
-                var sig = exprElab.ResolveSignal(eventControl.Expr!);
+                var sig = exprElab.ResolveSignal(eventControl.Expr);
                 var waitStmt = new WaitEventStatement(sig, eventControl.Edge ?? SvEdgeKind.None);
                 var innerStmt = ElaborateStatement(timedAst.Stmt!);
                 return new BlockStatement([waitStmt, innerStmt]);
@@ -73,15 +79,15 @@ public class ProceduralElaborator(
         }
     }
 
-    private BlockStatement ElaborateVariableDeclaration(SvVariableDeclaration decl)
+    private static BlockStatement ElaborateVariableDeclaration(SvVariableDeclaration decl)
     {
-        return new BlockStatement([]); // Handled structurally by ProcessMembers via scope
+        return new BlockStatement([]);
     }
 
     private IfStatement ElaborateConditional(SvConditional condAst)
     {
-        var condExpr = exprElab.ElaborateExpression<uint>(condAst.Conditions![0].Expr!);
-        var ifTrue = condAst.IfTrue != null ? ElaborateStatement(condAst.IfTrue) : new BlockStatement([]);
+        var condExpr = exprElab.ElaborateExpression<uint>(condAst.Conditions![0].Expr);
+        var ifTrue = ElaborateStatement(condAst.IfTrue);
         var ifFalse = condAst.IfFalse != null ? ElaborateStatement(condAst.IfFalse) : null;
 
         return new IfStatement(condExpr, ifTrue, ifFalse);
@@ -102,12 +108,28 @@ public class ProceduralElaborator(
         return new ForStatement(new BlockStatement(inits), stopExpr, new BlockStatement(steps), body);
     }
 
-    private IStatement ElaborateBlock(SvBlock block) => ElaborateStatement(block.Body!);
+    private ForeachStatement ElaborateForeachLoop(SvForeachLoop foreachAst)
+    {
+        var arrayObj = exprElab.ResolveRawObject(foreachAst.ArrayRef);
+        ISimLogicSignal? indexSig = null;
+
+        if (foreachAst.LoopDims is { Length: > 0 })
+        {
+            var loopVar = foreachAst.LoopDims[0].Var;
+            
+            indexSig = new LogicVar<uint>(32, new SimLogic<uint>(0, 0));
+            exprElab.RegisterSignal(loopVar.Addr, indexSig);
+        }
+
+        var body = ElaborateStatement(foreachAst.Body);
+        return new ForeachStatement(arrayObj, indexSig, body);
+    }
+
+    private IStatement ElaborateBlock(SvBlock block) => ElaborateStatement(block.Body);
 
     private BlockStatement ElaborateList(SvList list)
     {
         var stmts = new List<IStatement>();
-        if (list.List == null) return new BlockStatement(stmts);
         stmts.AddRange(list.List.Select(ElaborateStatement));
         return new BlockStatement(stmts);
     }
@@ -119,7 +141,6 @@ public class ProceduralElaborator(
             SvAssignment assign => ElaborateAssignment(assign),
             SvCall call => ElaborateCall(call),
             SvUnaryOp { Op: SvUnaryOperator.Preincrement } unary => ElaboratePostIncrementHelper(unary),
-            SvExpressionStatement => ElaborateStatement(exprStmt.Expr!),
             _ => new BlockStatement([])
         };
     }
@@ -135,39 +156,35 @@ public class ProceduralElaborator(
 
     private IStatement ElaborateAssignment(SvAssignment assignAst)
     {
-        if (assignAst.Right is SvNewArray newArr)
-        {
-            var targetObj = exprElab.ResolveRawObject(assignAst.Left!);
-            var sizeExpr = exprElab.ElaborateExpression<uint>(newArr.SizeExpr!);
+        if (assignAst.Right is not SvNewArray newArr)
+            return assignAst.Left switch
+            {
+                SvNamedValue namedVal => BuildStandardAssign(namedVal, assignAst),
+                SvHierarchicalValue hv => BuildStandardAssign(hv, assignAst),
+                SvMemberAccess memAcc => BuildMemberAssign(memAcc, assignAst),
+                SvRangeSelect range => BuildSliceAssign(range, assignAst),
+                SvElementSelect bit => BuildBitAssign(bit, assignAst),
+                SvConcatenation concatAst => BuildConcatAssign(concatAst, assignAst),
+                _ => throw new NotImplementedException($"Assignment to {assignAst.Left?.GetType().Name} not supported.")
+            };
+        var targetObj = exprElab.ResolveRawObject(assignAst.Left);
+        var sizeExpr = exprElab.ElaborateExpression<uint>(newArr.SizeExpr);
 
-            return new NewArrayStatement(targetObj, sizeExpr);
-        }
-
-        return assignAst.Left switch
-        {
-            SvNamedValue namedVal => BuildStandardAssign(namedVal.Symbol!, assignAst),
-            SvHierarchicalValue hv => BuildStandardAssign(hv.Symbol!, assignAst),
-            SvMemberAccess memAcc => BuildMemberAssign(memAcc, assignAst),
-            SvRangeSelect range => BuildSliceAssign(range, assignAst),
-            SvElementSelect bit => BuildBitAssign(bit, assignAst),
-            SvConcatenation concatAst => BuildConcatAssign(concatAst, assignAst),
-            _ => throw new NotImplementedException($"Assignment to {assignAst.Left?.GetType().Name} not supported.")
-        };
+        return new NewArrayStatement(targetObj, sizeExpr);
     }
 
-    private IStatement BuildStandardAssign(string symbolId, SvAssignment assignAst)
+    private IStatement BuildStandardAssign(ISvValueExpressionBase valNode, SvAssignment assignAst)
     {
-        var addr = ExpressionElaborator.ExtractId(symbolId);
+        var addr = valNode.ResolvedSymbol?.Addr ?? ExpressionElaborator.ExtractId(valNode.Symbol);
         var lhsObj = exprElab.GetSignal(addr);
 
         return lhsObj switch
         {
             null => throw new InvalidOperationException(
-                $"LHS Symbol '{symbolId}' (ID: {addr}) was not found in the symbol table. " +
-                "This usually means the signal/port was not registered during structural elaboration."),
+                $"LHS Symbol '{valNode.Symbol}' (ID: {addr}) was not found in the symbol table."),
             ISimLogicSignal sig => BuildAssignInternal(sig, assignAst),
             _ => throw new InvalidOperationException(
-                $"LHS '{symbolId}' is a {lhsObj.GetType().Name}, which is not an assignable logic variable.")
+                $"LHS '{valNode.Symbol}' is a {lhsObj.GetType().Name}, which is not an assignable logic variable.")
         };
     }
 
@@ -193,8 +210,7 @@ public class ProceduralElaborator(
             };
         }
 
-        // Catch-all for SliceSignal, PackedStructs, and Unions mapped as generic ISimLogicSignals
-        var rhsExpr = exprElab.ElaborateExpression<BigInteger>(assignAst.Right!);
+        var rhsExpr = exprElab.ElaborateExpression<BigInteger>(assignAst.Right);
         if (assignAst.IsNonBlocking)
             return new NbaGeneralAssignStatement(sig, rhsExpr, scheduler);
 
@@ -203,12 +219,12 @@ public class ProceduralElaborator(
 
     private IStatement BuildSliceAssign(SvRangeSelect rangeAst, SvAssignment assignAst)
     {
-        var sig = exprElab.ResolveSignal(rangeAst.Value!);
+        var sig = exprElab.ResolveSignal(rangeAst.Value);
 
-        var msb = ExpressionElaborator.EvaluateConstantInt(rangeAst.Left!);
-        var lsb = ExpressionElaborator.EvaluateConstantInt(rangeAst.Right!);
+        var msb = ExpressionElaborator.EvaluateConstantInt(rangeAst.Left);
+        var lsb = ExpressionElaborator.EvaluateConstantInt(rangeAst.Right);
 
-        var rhsExpr = exprElab.ElaborateExpression<BigInteger>(assignAst.Right!);
+        var rhsExpr = exprElab.ElaborateExpression<BigInteger>(assignAst.Right);
 
         if (assignAst.IsNonBlocking)
             return new NbaSliceAssignStatement(sig, msb, lsb, rhsExpr, scheduler);
@@ -218,26 +234,21 @@ public class ProceduralElaborator(
 
     private IStatement BuildBitAssign(SvElementSelect bitAst, SvAssignment assignAst)
     {
-        var targetObj = exprElab.ResolveRawObject(bitAst.Value!);
-        var indexExpr = exprElab.ElaborateExpression<BigInteger>(bitAst.Selector!);
-        var rhsExpr = exprElab.ElaborateExpression<BigInteger>(assignAst.Right!);
+        var targetObj = exprElab.ResolveRawObject(bitAst.Value);
+        var indexExpr = exprElab.ElaborateExpression<BigInteger>(bitAst.Selector);
+        var rhsExpr = exprElab.ElaborateExpression<BigInteger>(assignAst.Right);
 
-        if (targetObj is AssociativeArrayVar<BigInteger, ISimLogicSignal> aa)
+        switch (targetObj)
         {
-            return new AssociativeArrayAssignStatement(aa, indexExpr, rhsExpr);
+            case AssociativeArrayVar<BigInteger, ISimLogicSignal> aa:
+                return new AssociativeArrayAssignStatement(aa, indexExpr, rhsExpr);
+            case DynamicArrayVar<ISimLogicSignal> dyn:
+                return new DynamicArrayAssignStatement(dyn, indexExpr, rhsExpr);
+            case QueueVar<ISimLogicSignal> queue:
+                return new QueueAssignStatement(queue, indexExpr, rhsExpr);
         }
 
-        if (targetObj is DynamicArrayVar<ISimLogicSignal> dyn)
-        {
-            return new DynamicArrayAssignStatement(dyn, indexExpr, rhsExpr);
-        }
-
-        if (targetObj is QueueVar<ISimLogicSignal> queue)
-        {
-            return new QueueAssignStatement(queue, indexExpr, rhsExpr);
-        }
-
-        var sig = exprElab.ResolveSignal(bitAst.Value!);
+        var sig = exprElab.ResolveSignal(bitAst.Value);
         if (assignAst.IsNonBlocking)
             return new NbaBitAssignStatement(sig, indexExpr, rhsExpr, scheduler);
 
@@ -246,7 +257,7 @@ public class ProceduralElaborator(
 
     private IStatement BuildAssign<T>(LogicVar<T> lhs, SvAssignment assignAst) where T : IBinaryInteger<T>
     {
-        var rhsExpr = exprElab.ElaborateExpression<T>(assignAst.Right!);
+        var rhsExpr = exprElab.ElaborateExpression<T>(assignAst.Right);
 
         if (assignAst.IsNonBlocking)
             return new NbaAssignStatement<SimLogic<T>>(lhs, rhsExpr, scheduler);
@@ -260,12 +271,12 @@ public class ProceduralElaborator(
         foreach (var operand in concatAst.Operands!)
         {
             if (operand is not SvNamedValue nv) continue;
-            var addr = ExpressionElaborator.ExtractId(nv.Symbol);
+            var addr = nv.ResolvedSymbol?.Addr ?? ExpressionElaborator.ExtractId(nv.Symbol);
             var sig = exprElab.GetSignal(addr);
             if (sig is ISimLogicSignal ls) targetSignals.Add(ls);
         }
 
-        var rhsExpr = exprElab.ElaborateExpression<BigInteger>(assignAst.Right!);
+        var rhsExpr = exprElab.ElaborateExpression<BigInteger>(assignAst.Right);
 
         if (assignAst.IsNonBlocking)
             return new NbaConcatAssignStatement(targetSignals.ToArray(), rhsExpr, scheduler);
@@ -275,7 +286,7 @@ public class ProceduralElaborator(
 
     private IStatement ElaborateCall(SvCall callAst)
     {
-        var taskName = callAst.Subroutine;
+        var taskName = ExpressionElaborator.ExtractName(callAst.Subroutine);
         if (!string.IsNullOrEmpty(taskName))
         {
             var key = compiledTasks.Keys.FirstOrDefault(taskName.EndsWith);
@@ -307,11 +318,11 @@ public class ProceduralElaborator(
 
         if (callAst.Arguments == null || callAst.Arguments.Length == 0)
         {
-            return new SystemCallStatement(callAst.Subroutine ?? "unknown", formatStr, displayArgs, scheduler);
+            return new SystemCallStatement(taskName ?? "unknown", formatStr, displayArgs, scheduler);
         }
 
-        var isFatal = callAst.Subroutine == "$fatal";
-        var isFinish = callAst.Subroutine == "$finish";
+        var isFatal = taskName == "$fatal";
+        var isFinish = taskName == "$finish";
 
         var startIdx = 0;
         if (isFatal)
@@ -345,14 +356,14 @@ public class ProceduralElaborator(
         for (var i = startIdx; i < callAst.Arguments.Length; i++)
             displayArgs.Add(exprElab.ElaborateExpression<BigInteger>(callAst.Arguments[i]));
 
-        return new SystemCallStatement(callAst.Subroutine ?? "unknown", formatStr, displayArgs, scheduler);
+        return new SystemCallStatement(taskName ?? "unknown", formatStr, displayArgs, scheduler);
     }
 
     private IStatement ElaboratePostIncrementHelper(SvUnaryOp unaryOp)
     {
         if (unaryOp.Operand is not SvNamedValue namedVal) return new BlockStatement([]);
 
-        var addr = ExpressionElaborator.ExtractId(namedVal.Symbol);
+        var addr = namedVal.ResolvedSymbol?.Addr ?? ExpressionElaborator.ExtractId(namedVal.Symbol);
         var lhsObj = exprElab.GetSignal(addr);
 
         return lhsObj switch
@@ -379,19 +390,15 @@ public class ProceduralElaborator(
 
     private CaseStatement<BigInteger> ElaborateCase(SvCase caseAst)
     {
-        var condition = exprElab.ElaborateExpression<BigInteger>(caseAst.Expr!);
+        var condition = exprElab.ElaborateExpression<BigInteger>(caseAst.Expr);
         var items = new List<(IExpression<SimLogic<BigInteger>>[], IStatement)>();
 
-        if (caseAst.Items != null)
+        foreach (var item in caseAst.Items)
         {
-            foreach (var item in caseAst.Items)
-            {
-                var matches = new List<IExpression<SimLogic<BigInteger>>>();
-                if (item.Expressions != null)
-                    matches.AddRange(item.Expressions.Select(exprElab.ElaborateExpression<BigInteger>));
+            var matches = new List<IExpression<SimLogic<BigInteger>>>();
+            matches.AddRange(item.Expressions.Select(exprElab.ElaborateExpression<BigInteger>));
 
-                items.Add((matches.ToArray(), ElaborateStatement(item.Stmt!)));
-            }
+            items.Add((matches.ToArray(), ElaborateStatement(item.Stmt)));
         }
 
         var defaultCase = caseAst.DefaultCase != null ? ElaborateStatement(caseAst.DefaultCase) : null;

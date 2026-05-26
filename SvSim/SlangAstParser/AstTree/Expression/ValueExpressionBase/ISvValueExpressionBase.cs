@@ -8,19 +8,22 @@ namespace SvSim.SlangAstParser.AstTree.Expression.ValueExpressionBase;
 [JsonDerivedType(typeof(SvNamedValue), nameof(SvExpressionKind.NamedValue))]
 public interface ISvValueExpressionBase : ISvExpression
 {
-    public ISvSymbol Symbol { get; init; }
+    public string Symbol { get; init; }
+    [JsonIgnore] public ISvSymbol? ResolvedSymbol { get; set; }
 }
-public record SvHierarchicalValue : ISvExpression
+public record SvHierarchicalValue : ISvValueExpressionBase
 {
     public required string Type { get; init; }
     public required string Symbol { get; init; }
+    public ISvSymbol? ResolvedSymbol { get; set; }
     public string? Ref { get; init; }
     public string? Kind { get; init; }
 }
-public record SvNamedValue : ISvExpression
+public record SvNamedValue : ISvValueExpressionBase
 {
     public required string Type { get; init; }
     public required string Symbol { get; init; }
+    public ISvSymbol? ResolvedSymbol { get; set; }
     public string? Kind { get; init; }
     public string? Constant { get; init; }
 }
