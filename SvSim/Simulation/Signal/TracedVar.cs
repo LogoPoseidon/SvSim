@@ -1,5 +1,4 @@
 ﻿using System.Runtime.CompilerServices;
-using SvSim.Simulation.Processes;
 
 namespace SvSim.Simulation.Signal;
 

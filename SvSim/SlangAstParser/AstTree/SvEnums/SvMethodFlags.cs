@@ -1,6 +1,6 @@
 ﻿namespace SvSim.SlangAstParser.AstTree.SvEnums;
 [Flags]
-public enum SvMethodFalgs
+public enum SvMethodFlags
 {
     None = 0,
     Virtual = 1 << 0,

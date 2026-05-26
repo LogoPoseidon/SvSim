@@ -5,7 +5,13 @@ using SvSim.Simulation.Processes;
 using SvSim.Simulation.Expressions;
 using SvSim.Simulation.Statements;
 using SvSim.SlangAstParser.AstTree;
+using SvSim.SlangAstParser.AstTree.Expression;
+using SvSim.SlangAstParser.AstTree.Expressions;
+using SvSim.SlangAstParser.AstTree.Statements;
 using SvSim.SlangAstParser.AstTree.SvEnums;
+using SvSim.SlangAstParser.AstTree.Symbols;
+using SvSim.SlangAstParser.AstTree.TimingControls;
+using SvSim.SlangAstParser.AstTree.Types;
 
 namespace SvSim.Elaboration;
 
@@ -444,7 +450,7 @@ public class StructuralElaborator
             case SvPort portAst:
                 var internalObj = _exprElaborator.GetSignal(portAst.Addr);
                 if (internalObj is ISimLogicSignal sig)
-                    InvokeBuildPortConnection(sig, conn, portAst.Direction!);
+                    InvokeBuildPortConnection(sig, conn, portAst.Direction ?? throw new InvalidOperationException("Port direction cannot be null"));
                 break;
 
             case SvInterfacePort ifPort:
@@ -460,7 +466,7 @@ public class StructuralElaborator
         }
     }
 
-    private void InvokeBuildPortConnection(ISimLogicSignal internalSignal, InstanceConnection conn, string direction)
+    private void InvokeBuildPortConnection(ISimLogicSignal internalSignal, InstanceConnection conn, SvArgumentDirection direction)
     {
         var type = internalSignal.GetType();
         if (!type.IsGenericType || type.GetGenericTypeDefinition() != typeof(LogicVar<>)) return;

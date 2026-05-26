@@ -3,6 +3,8 @@ using SvSim.Simulation.Engine;
 using SvSim.SlangAstParser.AstTree;
 using SvSim.Simulation.Expressions;
 using SvSim.Simulation.Signal;
+using SvSim.SlangAstParser.AstTree.Expression;
+using SvSim.SlangAstParser.AstTree.Expressions;
 using SvSim.SlangAstParser.AstTree.SvEnums;
 
 namespace SvSim.Elaboration;

@@ -1,6 +1,4 @@
-﻿using System.Collections.Generic;
-
-namespace SvSim.Elaboration;
+﻿namespace SvSim.Elaboration;
 
 public class TypeDefinition
 {

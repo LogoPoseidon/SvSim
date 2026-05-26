@@ -1,5 +1,4 @@
 ﻿using System.Numerics;
-using System.Text;
 using SvSim.Elaboration;
 using SvSim.Simulation.Signal;
 

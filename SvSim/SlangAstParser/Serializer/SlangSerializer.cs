@@ -1,23 +1,27 @@
 ﻿using System.Text.Json;
 using System.Text.Json.Serialization;
+using SvSim.SlangAstParser.AstTree.SvEnums;
 
 namespace SvSim.SlangAstParser.Serializer
 {
     public static class SlangSerializer
     {
-        private static readonly JsonSerializerOptions Options = new()
+        private static readonly JsonSerializerOptions SerializerOptions = new()
         {
             PropertyNameCaseInsensitive = true,
             AllowOutOfOrderMetadataProperties = true, 
+            UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
             Converters =
             {
+                new JsonStringEnumConverter<SvVariableFlags>(JsonNamingPolicy.SnakeCaseLower),
                 new JsonStringEnumConverter(),
+                new SvInstanceBodyConverter()
             }
         };
         public static TopLevel? Parse(string json)
         {
         
-            return JsonSerializer.Deserialize<TopLevel>(json, Options);
+            return JsonSerializer.Deserialize<TopLevel>(json, SerializerOptions);
         }
     
     }

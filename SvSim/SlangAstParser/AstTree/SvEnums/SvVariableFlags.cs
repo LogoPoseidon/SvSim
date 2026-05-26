@@ -1,4 +1,6 @@
-﻿namespace SvSim.SlangAstParser.AstTree.SvEnums;
+﻿using System.Text.Json.Serialization;
+
+namespace SvSim.SlangAstParser.AstTree.SvEnums;
 [Flags]
 public enum SvVariableFlags
 {
