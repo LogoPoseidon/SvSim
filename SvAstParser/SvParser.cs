@@ -23,8 +23,8 @@ public static class SvParser
             throw new FileNotFoundException("The specified AST JSON file could not be found.", filePath);
         }
 
-        var json = File.ReadAllText(filePath);
-        return SlangSerializer.Parse(json);
+        var jsonBytes = File.ReadAllBytes(filePath);
+        return SlangSerializer.Parse(jsonBytes);
     }
 
     /// <summary>
@@ -119,21 +119,24 @@ public static class SvParser
                     $"Failed to start the slang process using executable '{slangExecutable}'.");
             }
 
-            var outputTask = process.StandardOutput.ReadToEndAsync();
+            using var ms = new MemoryStream();
+            var outputCopyTask = process.StandardOutput.BaseStream.CopyToAsync(ms);
             var errorTask = process.StandardError.ReadToEndAsync();
 
             process.WaitForExit();
 
-            var json = outputTask.GetAwaiter().GetResult();
+            outputCopyTask.GetAwaiter().GetResult();
             var errors = errorTask.GetAwaiter().GetResult();
 
-            if (string.IsNullOrWhiteSpace(json))
+            var jsonBytes = ms.ToArray();
+
+            if (jsonBytes.Length == 0)
             {
                 throw new InvalidOperationException(
                     $"slang execution completed with exit code {process.ExitCode} but did not produce AST output.\nError Output:\n{errors}");
             }
 
-            return SlangSerializer.Parse(json);
+            return SlangSerializer.Parse(jsonBytes);
         }
         catch (Exception ex) when (ex is not ArgumentException && ex is not FileNotFoundException &&
                                    ex is not InvalidOperationException)

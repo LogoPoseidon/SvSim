@@ -1,6 +1,7 @@
 ﻿using System.Collections;
 using System.Reflection;
 using System.Text.Json.Serialization;
+using SvAstParser.AstTree;
 using SvAstParser.AstTree.BinsSelectExpr;
 using SvAstParser.AstTree.Expression.ValueExpressionBase;
 using SvAstParser.AstTree.RandSeqProductionProd;
@@ -35,7 +36,6 @@ internal class SlangAstResolver
         Crawl(topLevel, LinkReferences);
     }
 
-    // Remaining private methods (RegisterSymbol, LinkReferences, etc.) stay the same...
     private void RegisterSymbol(object node)
     {
         if (node is ISvSymbol symbol && symbol.Addr != 0)
@@ -134,8 +134,10 @@ internal class SlangAstResolver
                 ct.ResolvedGenericClass = ResolveRef<SvGenericClassDef>(ct.GenericClass);
                 if (ct.Implements != null)
                 {
-                    ct.ResolvedImplements = ct.Implements.Select(ResolveRef<SvClassType>).OfType<SvClassType>().ToArray();
+                    ct.ResolvedImplements =
+                        ct.Implements.Select(ResolveRef<SvClassType>).OfType<SvClassType>().ToArray();
                 }
+
                 break;
             case SvVirtualInterfaceType vit:
                 vit.ResolvedModport = ResolveRef<SvModport>(vit.Modport);
@@ -168,25 +170,12 @@ internal class SlangAstResolver
                 {
                     cid.ResolvedId = cid.Id.Select(ResolveRef<SvCoverpoint>).OfType<SvCoverpoint>().ToArray();
                 }
+
                 break;
             case SvCondition cond:
                 cond.ResolvedTarget = ResolveRef<ISvSymbol>(cond.Target);
                 break;
         }
-    }
-
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, PropertyInfo[]> PropertyCache = new();
-
-    private static PropertyInfo[] GetCachedProperties(Type type)
-    {
-        return PropertyCache.GetOrAdd(type, t =>
-        {
-            var props = t.GetProperties(BindingFlags.Public | BindingFlags.Instance);
-            return props
-                .Where(prop => prop.GetIndexParameters().Length <= 0)
-                .Where(prop => !prop.IsDefined(typeof(JsonIgnoreAttribute), true))
-                .ToArray();
-        });
     }
 
     private T? ResolveRef<T>(string? refString) where T : class
@@ -201,6 +190,7 @@ internal class SlangAstResolver
         {
             return symbol as T;
         }
+
         return null;
     }
 
@@ -216,6 +206,7 @@ internal class SlangAstResolver
         {
             return addr;
         }
+
         return null;
     }
 
@@ -235,6 +226,7 @@ internal class SlangAstResolver
             {
                 Crawl(item, action);
             }
+
             return;
         }
 
@@ -254,5 +246,23 @@ internal class SlangAstResolver
         public static readonly ReferenceComparer Instance = new();
         bool IEqualityComparer<object>.Equals(object? x, object? y) => ReferenceEquals(x, y);
         public int GetHashCode(object obj) => System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(obj);
+    }
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, PropertyInfo[]> PropertyCache =
+        new();
+
+    private static PropertyInfo[] GetCachedProperties(Type type)
+    {
+        return PropertyCache.GetOrAdd(type, t =>
+        {
+            var props = t.GetProperties(BindingFlags.Public | BindingFlags.Instance);
+            return props
+                .Where(prop => prop.GetIndexParameters().Length == 0)
+                .Where(prop => !prop.IsDefined(typeof(JsonIgnoreAttribute), true))
+                .Where(prop => typeof(ISvAstNode).IsAssignableFrom(prop.PropertyType) ||
+                               (typeof(IEnumerable).IsAssignableFrom(prop.PropertyType) &&
+                                prop.PropertyType != typeof(string)))
+                .ToArray();
+        });
     }
 }

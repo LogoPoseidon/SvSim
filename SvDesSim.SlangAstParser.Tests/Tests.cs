@@ -10,7 +10,7 @@ using SvAstParser.AstTree.SvEnums;
 using SvAstParser.AstTree.Symbol;
 using SvAstParser.AstTree.TimingControl;
 
-namespace SvSim.SlangAstParser.Tests;
+namespace SvDesSim.SlangAstParser.Tests;
 
 [TestFixture]
 public class AstPolymorphicMappingTests

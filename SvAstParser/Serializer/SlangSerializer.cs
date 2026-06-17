@@ -6,7 +6,7 @@ namespace SvAstParser.Serializer;
 
 internal static class SlangSerializer
 {
-    private static readonly JsonSerializerOptions SerializerOptions = new()
+    private static readonly JsonSerializerOptions ReflectionOptions = new()
     {
         PropertyNameCaseInsensitive = true,
         AllowOutOfOrderMetadataProperties = true,
@@ -15,17 +15,17 @@ internal static class SlangSerializer
         {
             new JsonStringEnumConverter<SvVariableFlags>(JsonNamingPolicy.SnakeCaseLower),
             new JsonStringEnumConverter(),
-            new SvInstanceBodyConverter()
+            new SvInstanceBodyConverter(),
+            new PooledStringConverter()
         }
     };
 
-    internal static TopLevel Parse(string json)
+    internal static TopLevel Parse(ReadOnlySpan<byte> utf8JsonBytes)
     {
-        var topLevel = JsonSerializer.Deserialize<TopLevel>(json, SerializerOptions) ??
+        var topLevel = JsonSerializer.Deserialize<TopLevel>(utf8JsonBytes, ReflectionOptions) ??
                        throw new JsonException("Failed to deserialize top level or no module given");
 
         SlangAstResolver.Resolve(topLevel);
-
         return topLevel;
     }
 }
