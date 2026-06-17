@@ -7,15 +7,19 @@ using SvDesSim.Simulation.Engine;
 using SvDesSim.Simulation.Expressions;
 using SvDesSim.Simulation.RandomGenerator;
 using SvDesSim.Simulation.Signal;
+using SvDesSim.Simulation.Statements;
+using SvMinTypMax = SvAstParser.AstTree.Expression.SvMinTypMax;
 
 namespace SvDesSim.Elaboration;
 
-public class ExpressionElaborator(EventScheduler scheduler)
+public class ExpressionElaborator(EventScheduler scheduler, Dictionary<string, (IStatement body, List<ISimLogicSignal> args)> compiledTasks)
 {
     private readonly Dictionary<long, object> _signalSymbolTable = new();
 
     private static readonly Dictionary<long, ClassInstanceVar> ObjectHeap = new();
     private static int _nextObjectHandle = 1;
+
+    private ISvExpression? _currentLValueContext;
 
     public HashSet<ISimEventSource> Dependencies { get; } = [];
 
@@ -40,6 +44,15 @@ public class ExpressionElaborator(EventScheduler scheduler)
     public object? GetSignal(long addr) => _signalSymbolTable.GetValueOrDefault(addr);
     public void ClearDependencies() => Dependencies.Clear();
 
+    public IExpression<SimLogic<T>> ElaborateRhsExpression<T>(ISvExpression rhs, ISvExpression lhs) where T : IBinaryInteger<T>
+    {
+        var prevContext = _currentLValueContext;
+        _currentLValueContext = lhs;
+        var expr = ElaborateExpression<T>(rhs);
+        _currentLValueContext = prevContext;
+        return expr;
+    }
+
     public IExpression<SimLogic<T>> ElaborateExpression<T>(ISvExpression astNode) where T : IBinaryInteger<T>
     {
         return astNode switch
@@ -54,9 +67,8 @@ public class ExpressionElaborator(EventScheduler scheduler)
             SvArbitrarySymbol arbSym => ElaborateSymbolLookupByName<T>(arbSym.Symbol),
             SvBinary binOp => ElaborateBinaryOp<T>(binOp),
             SvUnaryOp unaryOp => ElaborateUnaryOp<T>(unaryOp),
-            SvCall callAst => ElaborateSystemCall<T>(callAst),
-            SvRangeSelect rs => new SliceReadExpr<T>(ResolveSignal(rs.Value), EvaluateConstantInt(rs.Left),
-                EvaluateConstantInt(rs.Right)),
+            SvCall callAst => ElaborateCall<T>(callAst),
+            SvRangeSelect rs => ElaborateRangeSelect<T>(rs),
             SvElementSelect es => ResolveElementSelect<T>(es),
             SvConditionalOp condOp => ElaborateConditionalOp<T>(condOp),
             SvNewClass newClass => ElaborateNewClass<T>(newClass),
@@ -64,12 +76,122 @@ public class ExpressionElaborator(EventScheduler scheduler)
             SvNullLiteral => new LiteralExpr<SimLogic<T>>(new SimLogic<T>(T.Zero, T.Zero)),
             SvDataType => new LiteralExpr<SimLogic<T>>(new SimLogic<T>(T.Zero, T.Zero)),
             SvStructuredAssignmentPattern structPattern => ElaborateStructuredAssignmentPattern<T>(structPattern),
+
+            SvConcatenation concat => ElaborateConcatenation<T>(concat),
+            not null when astNode.GetType().Name == "SvStreamingConcatenation" => ElaborateStreamingConcatenation<T>(astNode),
+            not null when astNode.GetType().Name == "SvTaggedUnion" => ElaborateTaggedUnion<T>(astNode),
+            not null when astNode.GetType().Name == "SvInvalid" => new LiteralExpr<SimLogic<T>>(new SimLogic<T>(T.Zero, T.Zero)),
+            SvReplication rep => ElaborateReplication<T>(rep),
+            SvMinTypMax mtm => ElaborateExpression<T>(mtm.Selected),
+            SvAssignment assign => ElaborateAssignmentRhs<T>(assign),
+
+            SvInside insideAst => ElaborateInside<T>(insideAst),
+            SvLValueReference => ElaborateExpression<T>(_currentLValueContext ??
+                                                        throw new InvalidOperationException(
+                                                            "SvLValueReference encountered outside of a compound assignment context.")),
+            SvValueRange => throw new InvalidOperationException(
+                "SvValueRange cannot be evaluated standalone; it must be evaluated contextually (e.g., within an 'inside' expression)."),
+
             _ => throw new NotImplementedException(
-                $"AST Expression Node {astNode.GetType().Name} is not supported yet.")
+                $"AST Expression Node {astNode?.GetType().Name} is not supported yet.")
         };
     }
 
-    private IExpression<SimLogic<T>> ElaborateNewClass<T>(SvNewClass newClass) where T : IBinaryInteger<T>
+    private IExpression<SimLogic<T>> ElaborateAssignmentRhs<T>(SvAssignment assign) where T : IBinaryInteger<T>
+    {
+        return ElaborateRhsExpression<T>(assign.Right, assign.Left);
+    }
+
+    private InsideExpr<T> ElaborateInside<T>(SvInside insideAst) where T : IBinaryInteger<T>
+    {
+        var left = ElaborateExpression<BigInteger>(insideAst.Left);
+        var ranges = new List<IInsideRange>();
+
+        foreach (var r in insideAst.RangeList)
+        {
+            if (r is SvValueRange vr)
+            {
+                ranges.Add(new RangeValueMatch(
+                    ElaborateExpression<BigInteger>(vr.Left!),
+                    ElaborateExpression<BigInteger>(vr.Right!)));
+            }
+            else
+            {
+                ranges.Add(new SingleValueMatch(ElaborateExpression<BigInteger>(r)));
+            }
+        }
+
+        return new InsideExpr<T>(left, ranges);
+    }
+
+    private IExpression<SimLogic<T>> ElaborateRangeSelect<T>(SvRangeSelect rs) where T : IBinaryInteger<T>
+    {
+        var msb = EvaluateConstantInt(rs.Left);
+        var lsb = EvaluateConstantInt(rs.Right);
+        
+        try
+        {
+            var sig = ResolveSignal(rs.Value);
+            return new SliceReadExpr<T>(sig, msb, lsb);
+        }
+        catch
+        {
+            var expr = ElaborateExpression<BigInteger>(rs.Value);
+            return new ExprSliceReadExpr<T>(expr, msb, lsb);
+        }
+    }
+
+    private ConcatExpr<T> ElaborateConcatenation<T>(SvConcatenation concat) where T : IBinaryInteger<T>
+    {
+        var operands = (from op in concat.Operands!
+            let opExpr = ElaborateExpression<BigInteger>(op)
+            let width = StructuralElaborator.ParseWidth(op.Type)
+            select (opExpr, width)).ToList();
+
+        return new ConcatExpr<T>(operands);
+    }
+
+    private LiteralExpr<SimLogic<T>> ElaborateStreamingConcatenation<T>(ISvExpression astNode) where T : IBinaryInteger<T>
+    {
+        var type = astNode.GetType();
+        var operandsProp = type.GetProperty("Operands") ?? type.GetProperty("Elements") ?? type.GetProperty("Exprs");
+        if (operandsProp?.GetValue(astNode) is not System.Collections.IEnumerable operands) return new LiteralExpr<SimLogic<T>>(new SimLogic<T>(T.Zero, T.Zero));
+        BigInteger val = 0;
+        BigInteger unk = 0;
+        foreach (var opObj in operands)
+        {
+            if (opObj is not ISvExpression op) continue;
+            var opExpr = ElaborateExpression<BigInteger>(op);
+            var width = StructuralElaborator.ParseWidth(op.Type);
+            var ev = opExpr.Evaluate();
+            var mask = (BigInteger.One << width) - 1;
+            val = (val << width) | (ev.Value & mask);
+            unk = (unk << width) | (ev.Unknown & mask);
+        }
+        return new LiteralExpr<SimLogic<T>>(new SimLogic<T>(T.CreateTruncating(val), T.CreateTruncating(unk)));
+    }
+    
+    private IExpression<SimLogic<T>> ElaborateTaggedUnion<T>(ISvExpression astNode) where T : IBinaryInteger<T>
+    {
+        var type = astNode.GetType();
+        var exprProp = type.GetProperty("Expr") ?? type.GetProperty("Value");
+        if (exprProp?.GetValue(astNode) is ISvExpression expr)
+        {
+            return ElaborateExpression<T>(expr);
+        }
+        return new LiteralExpr<SimLogic<T>>(new SimLogic<T>(T.Zero, T.Zero));
+    }
+
+    private ReplicationExpr<T> ElaborateReplication<T>(SvReplication rep) where T : IBinaryInteger<T>
+    {
+        var countExpr = ElaborateExpression<BigInteger>(rep.Count);
+        var innerExpr = ElaborateExpression<BigInteger>(rep.Concat);
+        var width = StructuralElaborator.ParseWidth(rep.Concat.Type);
+
+        return new ReplicationExpr<T>(countExpr, innerExpr, width);
+    }
+
+    private static LiteralExpr<SimLogic<T>> ElaborateNewClass<T>(SvNewClass newClass) where T : IBinaryInteger<T>
     {
         var handle = Interlocked.Increment(ref _nextObjectHandle);
         var typeName = string.IsNullOrEmpty(newClass.Type) ? "anonymous_class" : newClass.Type;
@@ -80,7 +202,7 @@ public class ExpressionElaborator(EventScheduler scheduler)
         return new LiteralExpr<SimLogic<T>>(new SimLogic<T>(T.CreateTruncating(handle), T.Zero));
     }
 
-    private IExpression<SimLogic<T>> ElaborateNewCovergroup<T>() where T : IBinaryInteger<T>
+    private static LiteralExpr<SimLogic<T>> ElaborateNewCovergroup<T>() where T : IBinaryInteger<T>
     {
         var handle = Interlocked.Increment(ref _nextObjectHandle);
         var instance = new ClassInstanceVar("covergroup");
@@ -96,30 +218,25 @@ public class ExpressionElaborator(EventScheduler scheduler)
         BigInteger finalVal = 0;
         BigInteger finalUnk = 0;
 
-        if (TypeRegistry.TryGetType(cleanTypeName, out var def))
+        if (!TypeRegistry.TryGetType(cleanTypeName, out var def))
+            return new LiteralExpr<SimLogic<T>>(new SimLogic<T>(T.CreateTruncating(finalVal),
+                T.CreateTruncating(finalUnk)));
+        foreach (var (fieldName, slice) in def.Fields)
         {
-            foreach (var field in def.Fields)
-            {
-                var fieldName = field.Key;
-                var slice = field.Value;
+            var setter = pattern.MemberSetters?.FirstOrDefault(s => s.Member == fieldName);
+            if (setter?.Expr == null) continue;
+            var evaluated = ElaborateExpression<BigInteger>(setter.Expr).Evaluate();
+            var mask = (BigInteger.One << (slice.Msb - slice.Lsb + 1)) - 1;
 
-                var setter = pattern.MemberSetters?.FirstOrDefault(s => s.Member == fieldName);
-                if (setter?.Expr != null)
-                {
-                    var evaluated = ElaborateExpression<BigInteger>(setter.Expr).Evaluate();
-                    var mask = (BigInteger.One << (slice.Msb - slice.Lsb + 1)) - 1;
-
-                    finalVal |= (evaluated.Value & mask) << slice.Lsb;
-                    finalUnk |= (evaluated.Unknown & mask) << slice.Lsb;
-                }
-            }
+            finalVal |= (evaluated.Value & mask) << slice.Lsb;
+            finalUnk |= (evaluated.Unknown & mask) << slice.Lsb;
         }
 
         return new LiteralExpr<SimLogic<T>>(new SimLogic<T>(T.CreateTruncating(finalVal),
             T.CreateTruncating(finalUnk)));
     }
 
-    private IExpression<SimLogic<T>> ElaborateConditionalOp<T>(SvConditionalOp condOp) where T : IBinaryInteger<T>
+    private ConditionalOpExpr<T> ElaborateConditionalOp<T>(SvConditionalOp condOp) where T : IBinaryInteger<T>
     {
         var cond = ElaborateExpression<T>(condOp.Conditions![0].Expr);
         var left = ElaborateExpression<T>(condOp.Left!);
@@ -208,8 +325,7 @@ public class ExpressionElaborator(EventScheduler scheduler)
 
         if (obj is null)
         {
-            Console.WriteLine($"[Warning] Symbol ID {addr} ({rawSymbolName}) not found. Defaulting to 0.");
-            return new LiteralExpr<SimLogic<T>>(new SimLogic<T>(T.Zero, T.Zero));
+            throw new Exception($"Symbol ID {addr} ({rawSymbolName}) not found.");
         }
 
         switch (obj)
@@ -307,7 +423,7 @@ public class ExpressionElaborator(EventScheduler scheduler)
             }
             catch
             {
-                // Elaboration-time safe fallback
+                /* Elaboration-time safe fallback */
             }
         }
 
@@ -347,7 +463,10 @@ public class ExpressionElaborator(EventScheduler scheduler)
         }
 
         if (node is not SvMemberAccess ma)
-            throw new Exception($"Could not resolve signal source for {node.GetType().Name}.");
+        {
+            var symbolStr = (node as ISvValueExpressionBase)?.Symbol ?? "unknown";
+            throw new Exception($"Could not resolve signal source for {node.GetType().Name}. Addr: {addr}, Symbol: {symbolStr}");
+        }
 
         var containerObj = ResolveRawObject(ma.Value!);
         var memberName = ExtractName(ma.Member);
@@ -366,7 +485,7 @@ public class ExpressionElaborator(EventScheduler scheduler)
             }
             catch
             {
-                // Elaboration-time safe fallback
+                /* Elaboration-time safe fallback */
             }
         }
 
@@ -393,6 +512,17 @@ public class ExpressionElaborator(EventScheduler scheduler)
         return new SignalCastReadExpr<T>(sig);
     }
 
+    private IExpression<SimLogic<T>> ElaborateCall<T>(SvCall callAst) where T : IBinaryInteger<T>
+    {
+        var cleanSubroutine = ExtractName(callAst.Subroutine);
+        if (cleanSubroutine.StartsWith('$') || cleanSubroutine is "size" or "exists" or "name" or "randomize" or "get_inst_coverage" || cleanSubroutine == "isunknown" || cleanSubroutine is "signed" or "unsigned")
+        {
+            return ElaborateSystemCall<T>(callAst);
+        }
+
+        return new FunctionCallExpr<T>(cleanSubroutine, callAst.Arguments, this, compiledTasks);
+    }
+
     private IExpression<SimLogic<T>> ElaborateSystemCall<T>(SvCall callAst)
         where T : IBinaryInteger<T>
     {
@@ -410,6 +540,15 @@ public class ExpressionElaborator(EventScheduler scheduler)
                 var targetObj = ResolveRawObject(callAst.Arguments![0]);
                 var keyExpr = ElaborateExpression<BigInteger>(callAst.Arguments![1]);
                 return new ArrayExistsExpr<T>(targetObj, keyExpr);
+            }
+            case "$signed":
+            case "signed":
+            case "$unsigned":
+            case "unsigned":
+            {
+                if (callAst.Arguments is { Length: > 0 })
+                    return ElaborateExpression<T>(callAst.Arguments[0]);
+                return new LiteralExpr<SimLogic<T>>(new SimLogic<T>(T.Zero, T.Zero));
             }
             case "$time":
                 return new TimeExpr<T>(scheduler);
@@ -455,7 +594,7 @@ public class ExpressionElaborator(EventScheduler scheduler)
             }
             case "get_inst_coverage":
                 return new LiteralExpr<SimLogic<T>>(new SimLogic<T>(T.CreateTruncating(85), T.Zero));
-            case "$isunknown":
+            case "$isunknown" or "isunknown":
                 if (callAst.Arguments is not { Length: > 0 })
                     return new LiteralExpr<SimLogic<T>>(new SimLogic<T>(T.Zero, T.Zero));
                 var arg = ElaborateExpression<BigInteger>(callAst.Arguments[0]).Evaluate();
@@ -584,5 +723,73 @@ public class ExpressionElaborator(EventScheduler scheduler)
     public static SimLogic<BigInteger> ParseSlangIntToBigInt(string? slangValue)
     {
         return ParseSlangInt<BigInteger>(slangValue);
+    }
+}
+
+public class FunctionCallExpr<T> : IExpression<SimLogic<T>> where T : IBinaryInteger<T>
+{
+    private readonly string _functionName;
+    private readonly List<IExpression<SimLogic<BigInteger>>> _args = new();
+    private readonly Dictionary<string, (IStatement body, List<ISimLogicSignal> args)> _compiledTasks;
+
+    public FunctionCallExpr(
+        string functionName,
+        ISvExpression[]? arguments,
+        ExpressionElaborator exprElab,
+        Dictionary<string, (IStatement body, List<ISimLogicSignal> args)> compiledTasks)
+    {
+        _functionName = functionName;
+        _compiledTasks = compiledTasks;
+
+        if (arguments != null)
+        {
+            foreach (var arg in arguments)
+            {
+                _args.Add(exprElab.ElaborateExpression<BigInteger>(arg));
+            }
+        }
+    }
+
+    public SimLogic<T> Evaluate()
+    {
+        var key = _compiledTasks.Keys.FirstOrDefault(k => k.EndsWith(_functionName));
+        if (key == null || !_compiledTasks.TryGetValue(key, out var compiledTask))
+            throw new Exception($"Function '{_functionName}' not found in CompiledTasks.");
+        for (var i = 0; i < _args.Count && i < compiledTask.args.Count; i++)
+        {
+            var evalResult = _args[i].Evaluate();
+            compiledTask.args[i].AssignFromBigInteger(evalResult.Value, evalResult.Unknown);
+        }
+
+        try
+        {
+            using var enumerator = compiledTask.body.Execute().GetEnumerator();
+            while (enumerator.MoveNext()) { }
+        }
+        catch (ReturnException retEx)
+        {
+            if (retEx.ReturnValue.HasValue)
+            {
+                return new SimLogic<T>(
+                    T.CreateTruncating(retEx.ReturnValue.Value.Value),
+                    T.CreateTruncating(retEx.ReturnValue.Value.Unknown));
+            }
+        }
+        return new SimLogic<T>(T.Zero, T.Zero);
+    }
+}
+
+public class ExprSliceReadExpr<T>(IExpression<SimLogic<BigInteger>> expr, int msb, int lsb) : IExpression<SimLogic<T>> where T : IBinaryInteger<T>
+{
+    public SimLogic<T> Evaluate()
+    {
+        var bigVal = expr.Evaluate();
+        var sliceWidth = msb - lsb + 1;
+        var mask = (BigInteger.One << sliceWidth) - 1;
+        
+        var v = (bigVal.Value >> lsb) & mask;
+        var u = (bigVal.Unknown >> lsb) & mask;
+        
+        return new SimLogic<T>(T.CreateTruncating(v), T.CreateTruncating(u));
     }
 }

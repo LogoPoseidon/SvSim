@@ -11,6 +11,7 @@ using SvDesSim.Simulation.Expressions;
 using SvDesSim.Simulation.Signal;
 using SvDesSim.Simulation.Statements;
 using SvConditional = SvAstParser.AstTree.Statement.SvConditional;
+using SvInvalid = SvAstParser.AstTree.Statement.SvInvalid;
 
 namespace SvDesSim.Elaboration;
 
@@ -39,8 +40,30 @@ public class ProceduralElaborator(
             SvCall call => ElaborateCall(call),
             SvBreak => new BreakStatement(),
             SvEmpty => new BlockStatement([]),
+            
+            SvImmediateAssertion immAssert => ElaborateImmediateAssertion(immAssert),
+            SvProceduralAssign pAssign => pAssign.Assignment != null ? ElaborateAssignment((SvAssignment)pAssign.Assignment) : new BlockStatement([]),
+            ISvStatement pDeassign when pDeassign.GetType().Name == "SvProceduralDeassign" => new BlockStatement([]),
+            SvInvalid => new BlockStatement([]), 
+            SvReturn retAst => ElaborateReturn(retAst),
+            
             _ => throw new NotImplementedException($"{ast.GetType()} not implemented as procedural statement.")
         };
+    }
+    
+    private ReturnStatement ElaborateReturn(SvReturn retAst)
+    {
+        if (retAst.Expr == null) return new ReturnStatement(null);
+        var expr = exprElab.ElaborateExpression<BigInteger>(retAst.Expr);
+        return new ReturnStatement(expr);
+    }
+    
+    private IfStatement ElaborateImmediateAssertion(SvImmediateAssertion ast)
+    {
+        var condExpr = exprElab.ElaborateExpression<uint>(ast.Cond);
+        var ifTrue = ast.IfTrue != null ? ElaborateStatement(ast.IfTrue) : new BlockStatement([]);
+        var ifFalse = ast.IfFalse != null ? ElaborateStatement(ast.IfFalse) : new BlockStatement([]);
+        return new IfStatement(condExpr, ifTrue, ifFalse);
     }
 
     private BlockStatement ElaborateStatementBlock(SvStatementBlock block)
@@ -56,10 +79,8 @@ public class ProceduralElaborator(
         {
             case SvDelay delay:
             {
-                if (delay.Expr is not SvIntegerLiteral intLit)
-                    throw new NotImplementedException(
-                        $"Unsupported timing control delay type: {timedAst.Timing.GetType().Name}");
-                var delayVal = ulong.Parse(intLit.Value!);
+                var delayExpr = exprElab.ElaborateExpression<BigInteger>(delay.Expr);
+                var delayVal = (ulong)delayExpr.Evaluate().Value;
                 var innerStmt = ElaborateStatement(timedAst.Stmt);
                 return new BlockStatement([new DelayStatement(delayVal), innerStmt]);
             }
@@ -70,6 +91,15 @@ public class ProceduralElaborator(
                 var innerStmt = ElaborateStatement(timedAst.Stmt);
                 return new BlockStatement([waitStmt, innerStmt]);
             }
+            case SvEventList eventList:
+            {
+                var triggers = StructuralElaborator.ResolveTriggers(eventList, exprElab);
+                var waitStmt = new WaitEventListStatement(triggers);
+                var innerStmt = ElaborateStatement(timedAst.Stmt);
+                return new BlockStatement([waitStmt, innerStmt]);
+            }
+            case SvImplicitEvent:
+                return new BlockStatement([ElaborateStatement(timedAst.Stmt)]);
             default:
                 throw new NotImplementedException(
                     $"Unsupported timing control type: {timedAst.Timing.GetType().Name}");
@@ -164,6 +194,7 @@ public class ProceduralElaborator(
                 SvRangeSelect range => BuildSliceAssign(range, assignAst),
                 SvElementSelect bit => BuildBitAssign(bit, assignAst),
                 SvConcatenation concatAst => BuildConcatAssign(concatAst, assignAst),
+                { } sc when sc.GetType().Name == "SvStreamingConcatenation" => BuildStreamingConcatAssign(sc, assignAst),
                 _ => throw new NotImplementedException($"Assignment to {assignAst.Left.GetType().Name} not supported.")
             };
         var targetObj = exprElab.ResolveRawObject(assignAst.Left);
@@ -182,6 +213,8 @@ public class ProceduralElaborator(
             null => throw new InvalidOperationException(
                 $"LHS Symbol '{valNode.Symbol}' (ID: {addr}) was not found in the symbol table."),
             ISimLogicSignal sig => BuildAssignInternal(sig, assignAst),
+            QueueVar<ISimLogicSignal> q => new ArrayWholeAssignStatement(q, exprElab.ElaborateRhsExpression<BigInteger>(assignAst.Right, assignAst.Left), assignAst.IsNonBlocking ? scheduler : null),
+            DynamicArrayVar<ISimLogicSignal> dyn => new ArrayWholeAssignStatement(dyn, exprElab.ElaborateRhsExpression<BigInteger>(assignAst.Right, assignAst.Left), assignAst.IsNonBlocking ? scheduler : null),
             _ => throw new InvalidOperationException(
                 $"LHS '{valNode.Symbol}' is a {lhsObj.GetType().Name}, which is not an assignable logic variable.")
         };
@@ -209,7 +242,7 @@ public class ProceduralElaborator(
             };
         }
 
-        var rhsExpr = exprElab.ElaborateExpression<BigInteger>(assignAst.Right);
+        var rhsExpr = exprElab.ElaborateRhsExpression<BigInteger>(assignAst.Right, assignAst.Left);
         if (assignAst.IsNonBlocking)
             return new NbaGeneralAssignStatement(sig, rhsExpr, scheduler);
 
@@ -223,7 +256,7 @@ public class ProceduralElaborator(
         var msb = ExpressionElaborator.EvaluateConstantInt(rangeAst.Left);
         var lsb = ExpressionElaborator.EvaluateConstantInt(rangeAst.Right);
 
-        var rhsExpr = exprElab.ElaborateExpression<BigInteger>(assignAst.Right);
+        var rhsExpr = exprElab.ElaborateRhsExpression<BigInteger>(assignAst.Right, assignAst.Left);
 
         if (assignAst.IsNonBlocking)
             return new NbaSliceAssignStatement(sig, msb, lsb, rhsExpr, scheduler);
@@ -235,7 +268,7 @@ public class ProceduralElaborator(
     {
         var targetObj = exprElab.ResolveRawObject(bitAst.Value);
         var indexExpr = exprElab.ElaborateExpression<BigInteger>(bitAst.Selector);
-        var rhsExpr = exprElab.ElaborateExpression<BigInteger>(assignAst.Right);
+        var rhsExpr = exprElab.ElaborateRhsExpression<BigInteger>(assignAst.Right, assignAst.Left);
 
         switch (targetObj)
         {
@@ -256,7 +289,7 @@ public class ProceduralElaborator(
 
     private IStatement BuildAssign<T>(LogicVar<T> lhs, SvAssignment assignAst) where T : IBinaryInteger<T>
     {
-        var rhsExpr = exprElab.ElaborateExpression<T>(assignAst.Right);
+        var rhsExpr = exprElab.ElaborateRhsExpression<T>(assignAst.Right, assignAst.Left);
 
         if (assignAst.IsNonBlocking)
             return new NbaAssignStatement<SimLogic<T>>(lhs, rhsExpr, scheduler);
@@ -275,7 +308,34 @@ public class ProceduralElaborator(
             if (sig is ISimLogicSignal ls) targetSignals.Add(ls);
         }
 
-        var rhsExpr = exprElab.ElaborateExpression<BigInteger>(assignAst.Right);
+        var rhsExpr = exprElab.ElaborateRhsExpression<BigInteger>(assignAst.Right, assignAst.Left);
+
+        if (assignAst.IsNonBlocking)
+            return new NbaConcatAssignStatement(targetSignals.ToArray(), rhsExpr, scheduler);
+
+        return new ConcatAssignStatement(targetSignals.ToArray(), rhsExpr);
+    }
+
+    private IStatement BuildStreamingConcatAssign(ISvExpression concatAst, SvAssignment assignAst)
+    {
+        var targetSignals = new List<ISimLogicSignal>();
+        var type = concatAst.GetType();
+        var operandsProp = type.GetProperty("Operands") ?? type.GetProperty("Elements") ?? type.GetProperty("Exprs");
+        if (operandsProp?.GetValue(concatAst) is System.Collections.IEnumerable operands)
+        {
+            foreach (var operand in operands)
+            {
+                if (operand is not ISvExpression op) continue;
+                if (op is SvNamedValue nv)
+                {
+                    var addr = nv.ResolvedSymbol?.Addr ?? ExpressionElaborator.ExtractId(nv.Symbol);
+                    var sig = exprElab.GetSignal(addr);
+                    if (sig is ISimLogicSignal ls) targetSignals.Add(ls);
+                }
+            }
+        }
+
+        var rhsExpr = exprElab.ElaborateRhsExpression<BigInteger>(assignAst.Right, assignAst.Left);
 
         if (assignAst.IsNonBlocking)
             return new NbaConcatAssignStatement(targetSignals.ToArray(), rhsExpr, scheduler);

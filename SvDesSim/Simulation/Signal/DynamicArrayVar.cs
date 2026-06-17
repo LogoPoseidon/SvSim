@@ -9,7 +9,7 @@ public class DynamicArrayVar<TVar>(Func<TVar> factory) : ISimEventSource where T
     private TVar[] _elements = [];
     private readonly HashSet<ISimEvent> _subscribers = [];
 
-    private Func<TVar> Factory { get; } = factory;
+    public Func<TVar> Factory { get; } = factory;
 
     public int Size => _elements.Length;
 
@@ -30,6 +30,7 @@ public class DynamicArrayVar<TVar>(Func<TVar> factory) : ISimEventSource where T
         {
             _elements[i] = Factory();
         }
+
         Notify();
     }
 
@@ -46,5 +47,4 @@ public class DynamicArrayVar<TVar>(Func<TVar> factory) : ISimEventSource where T
     {
         foreach (var sub in _subscribers) sub.Trigger();
     }
-
 }

@@ -31,31 +31,28 @@ public class SvProcess(IEnumerator<YieldInstruction> routine, EventScheduler sch
                 var trigger = new EdgeTriggerBridge(this, edge.Signal, edge.EdgeType, scheduler);
                 edge.Signal.Subscribe(trigger);
                 break;
+
+            case SuspendEdgeList edgeList:
+                var compositeTrigger = new CompositeEdgeTriggerBridge(this, edgeList.Edges, scheduler);
+                foreach (var e in edgeList.Edges)
+                {
+                    e.sig.Subscribe(compositeTrigger);
+                }
+
+                break;
         }
     }
 
-    private class EdgeTriggerBridge : ISimEvent
+    private class EdgeTriggerBridge(SvProcess parent, ISimLogicSignal sig, SvEdgeKind edge, EventScheduler scheduler)
+        : ISimEvent
     {
-        private readonly SvProcess _parent;
-        private readonly ISimLogicSignal _sig;
-        private readonly SvEdgeKind _edge;
-        private readonly EventScheduler _scheduler;
-        private BigInteger _lastVal;
-
-        public EdgeTriggerBridge(SvProcess parent, ISimLogicSignal sig, SvEdgeKind edge, EventScheduler scheduler)
-        {
-            _parent = parent;
-            _sig = sig;
-            _edge = edge;
-            _scheduler = scheduler;
-            _lastVal = sig.GetValueAsBigInt();
-        }
+        private BigInteger _lastVal = sig.GetValueAsBigInt();
 
         public void Trigger()
         {
-            var newVal = _sig.GetValueAsBigInt();
+            var newVal = sig.GetValueAsBigInt();
 
-            var fired = _edge switch
+            var fired = edge switch
             {
                 SvEdgeKind.PosEdge => (_lastVal == 0 && newVal != 0),
                 SvEdgeKind.NegEdge => (_lastVal != 0 && newVal == 0),
@@ -65,9 +62,67 @@ public class SvProcess(IEnumerator<YieldInstruction> routine, EventScheduler sch
             _lastVal = newVal;
 
             if (!fired) return;
-            _sig.Unsubscribe(this);
+            sig.Unsubscribe(this);
+            scheduler.Schedule(EventRegion.Active, parent);
+        }
+
+        public void Execute()
+        {
+        }
+    }
+
+    private class CompositeEdgeTriggerBridge : ISimEvent
+    {
+        private readonly SvProcess _parent;
+        private readonly List<(ISimLogicSignal sig, SvEdgeKind edge)> _edges;
+        private readonly EventScheduler _scheduler;
+        private readonly BigInteger[] _lastVals;
+        private bool _fired;
+
+        public CompositeEdgeTriggerBridge(SvProcess parent, List<(ISimLogicSignal sig, SvEdgeKind edge)> edges,
+            EventScheduler scheduler)
+        {
+            _parent = parent;
+            _edges = edges;
+            _scheduler = scheduler;
+            _lastVals = new BigInteger[edges.Count];
+            for (var i = 0; i < edges.Count; i++)
+            {
+                _lastVals[i] = edges[i].sig.GetValueAsBigInt();
+            }
+        }
+
+        public void Trigger()
+        {
+            if (_fired) return;
+
+            var triggered = false;
+            for (var i = 0; i < _edges.Count; i++)
+            {
+                var newVal = _edges[i].sig.GetValueAsBigInt();
+                var edge = _edges[i].edge;
+                var lastVal = _lastVals[i];
+
+                var firedEdge = edge switch
+                {
+                    SvEdgeKind.PosEdge => (lastVal == 0 && newVal != 0),
+                    SvEdgeKind.NegEdge => (lastVal != 0 && newVal == 0),
+                    _ => (newVal != lastVal)
+                };
+
+                _lastVals[i] = newVal;
+                if (firedEdge) triggered = true;
+            }
+
+            if (!triggered) return;
+
+            _fired = true;
+            foreach (var edge in _edges) edge.sig.Unsubscribe(this);
             _scheduler.Schedule(EventRegion.Active, _parent);
         }
-        public void Execute() { }
+
+        public void Execute()
+        {
+        }
     }
 }
