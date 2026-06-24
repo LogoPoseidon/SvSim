@@ -6,6 +6,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SvDesSim.SlangAstParser.Tes
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SvAstParser", "SvAstParser\SvAstParser.csproj", "{80344979-ECAE-4C6D-B8F1-AACE077085E8}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PDesSimulator", "PDesSimulator\PDesSimulator.csproj", "{23044F5E-B62A-4A2F-98B7-1F2C7277F74A}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -24,5 +26,9 @@ Global
 		{80344979-ECAE-4C6D-B8F1-AACE077085E8}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{80344979-ECAE-4C6D-B8F1-AACE077085E8}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{80344979-ECAE-4C6D-B8F1-AACE077085E8}.Release|Any CPU.Build.0 = Release|Any CPU
+		{23044F5E-B62A-4A2F-98B7-1F2C7277F74A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{23044F5E-B62A-4A2F-98B7-1F2C7277F74A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{23044F5E-B62A-4A2F-98B7-1F2C7277F74A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{23044F5E-B62A-4A2F-98B7-1F2C7277F74A}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

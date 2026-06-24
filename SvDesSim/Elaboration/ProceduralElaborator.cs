@@ -6,6 +6,7 @@ using SvAstParser.AstTree.Statement;
 using SvAstParser.AstTree.SvEnums;
 using SvAstParser.AstTree.Symbol;
 using SvAstParser.AstTree.TimingControl;
+using SvAstParser.AstTree.Pattern;
 using SvDesSim.Simulation.Engine;
 using SvDesSim.Simulation.Expressions;
 using SvDesSim.Simulation.Signal;
@@ -14,6 +15,22 @@ using SvConditional = SvAstParser.AstTree.Statement.SvConditional;
 using SvInvalid = SvAstParser.AstTree.Statement.SvInvalid;
 
 namespace SvDesSim.Elaboration;
+
+public class RangeMatchExpr(IExpression<SimLogic<BigInteger>> min, IExpression<SimLogic<BigInteger>> max)
+    : IExpression<SimLogic<BigInteger>>
+{
+    public SimLogic<BigInteger> Evaluate()
+    {
+        return new SimLogic<BigInteger>(0, 0); // Should not be used for direct equality
+    }
+
+    public bool IsMatch(SimLogic<BigInteger> value)
+    {
+        var minVal = min.Evaluate().Value;
+        var maxVal = max.Evaluate().Value;
+        return value.Value >= minVal && value.Value <= maxVal;
+    }
+}
 
 public class ProceduralElaborator(
     ExpressionElaborator exprElab,
@@ -32,13 +49,16 @@ public class ProceduralElaborator(
             SvExpressionStatement exprStmt => ElaborateExpressionStmt(exprStmt),
             SvAssignment assign => ElaborateAssignment(assign),
             SvCase caseStmt => ElaborateCase(caseStmt),
+            SvPatternCase pCase => ElaboratePatternCase(pCase),
             SvTimed timedStmt => ElaborateTimed(timedStmt),
             SvConditional condAst => ElaborateConditional(condAst),
             SvForLoop forAst => ElaborateForLoop(forAst),
             SvForeachLoop foreachAst => ElaborateForeachLoop(foreachAst),
             SvUnaryOp unary => ElaborateUnaryOpStmt(unary),
+            SvRepeatLoop repeatAst => ElaborateRepeatLoop(repeatAst),
             SvCall call => ElaborateCall(call),
             SvBreak => new BreakStatement(),
+            SvContinue => new ContinueStatement(),
             SvEmpty => new BlockStatement([]),
             
             SvImmediateAssertion immAssert => ElaborateImmediateAssertion(immAssert),
@@ -113,6 +133,17 @@ public class ProceduralElaborator(
 
     private IfStatement ElaborateConditional(SvConditional condAst)
     {
+        foreach (var condItem in condAst.Conditions)
+        {
+            if (condItem.Pattern is SvVariable varPattern)
+            {
+                var addr = varPattern.Variable.Addr;
+                var width = StructuralElaborator.ParseWidth(varPattern.Variable.Type);
+                var sig = new LogicVar<BigInteger>(width, new SimLogic<BigInteger>(0, 0));
+                exprElab.RegisterSignal(addr, sig);
+            }
+        }
+
         var condExpr = exprElab.ElaborateExpression<uint>(condAst.Conditions[0].Expr);
         var ifTrue = ElaborateStatement(condAst.IfTrue);
         var ifFalse = condAst.IfFalse != null ? ElaborateStatement(condAst.IfFalse) : null;
@@ -135,6 +166,13 @@ public class ProceduralElaborator(
         var body = forAst.Body != null ? ElaborateStatement(forAst.Body) : new BlockStatement([]);
 
         return new ForStatement(new BlockStatement(inits), stopExpr, new BlockStatement(steps), body);
+    }
+
+    private RepeatStatement ElaborateRepeatLoop(SvRepeatLoop repeatAst)
+    {
+        var countExpr = exprElab.ElaborateExpression<BigInteger>(repeatAst.Count);
+        var body = ElaborateStatement(repeatAst.Body);
+        return new RepeatStatement(countExpr, body);
     }
 
     private ForeachStatement ElaborateForeachLoop(SvForeachLoop foreachAst)
@@ -455,12 +493,61 @@ public class ProceduralElaborator(
         foreach (var item in caseAst.Items)
         {
             var matches = new List<IExpression<SimLogic<BigInteger>>>();
-            matches.AddRange(item.Expressions.Select(exprElab.ElaborateExpression<BigInteger>));
+            foreach (var expr in item.Expressions)
+            {
+                if (expr is SvValueRange range)
+                {
+                    var min = exprElab.ElaborateExpression<BigInteger>(range.Left!);
+                    var max = exprElab.ElaborateExpression<BigInteger>(range.Right!);
+                    matches.Add(new RangeMatchExpr(min, max));
+                }
+                else
+                {
+                    matches.Add(exprElab.ElaborateExpression<BigInteger>(expr));
+                }
+            }
 
             items.Add((matches.ToArray(), ElaborateStatement(item.Stmt)));
         }
 
         var defaultCase = caseAst.DefaultCase != null ? ElaborateStatement(caseAst.DefaultCase) : null;
+        return new CaseStatement<BigInteger>(condition, items, defaultCase);
+    }
+
+    private IStatement ElaboratePatternCase(SvPatternCase pCase)
+    {
+        var condition = exprElab.ElaborateExpression<BigInteger>(pCase.Expr);
+        var items = new List<(IExpression<SimLogic<BigInteger>>[], IStatement)>();
+
+        foreach (var item in pCase.Items)
+        {
+            if (item.Pattern is SvVariable varPattern)
+            {
+                var addr = varPattern.Variable.Addr;
+                var width = StructuralElaborator.ParseWidth(varPattern.Variable.Type);
+                var sig = new LogicVar<BigInteger>(width, new SimLogic<BigInteger>(0, 0));
+                exprElab.RegisterSignal(addr, sig);
+            }
+
+            var matches = new List<IExpression<SimLogic<BigInteger>>>();
+            if (item.Pattern is SvConstant constantPattern)
+            {
+                matches.Add(exprElab.ElaborateExpression<BigInteger>(constantPattern.Expr));
+            }
+            else
+            {
+                // For other patterns, we'll need a way to represent the match.
+                // For now, if it's a variable pattern, it matches everything (like default or a wildcard).
+                // But in SV, pattern matching is more complex.
+                // If it's a variable pattern, it's basically a "match and bind".
+                // As a simplified version, we can use a Literal 1 to match everything.
+                matches.Add(new LiteralExpr<SimLogic<BigInteger>>(new SimLogic<BigInteger>(1, 0)));
+            }
+
+            items.Add((matches.ToArray(), ElaborateStatement(item.Stmt)));
+        }
+
+        var defaultCase = pCase.DefaultCase != null ? ElaborateStatement(pCase.DefaultCase) : null;
         return new CaseStatement<BigInteger>(condition, items, defaultCase);
     }
 }

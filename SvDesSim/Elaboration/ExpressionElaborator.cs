@@ -333,6 +333,10 @@ public class ExpressionElaborator(EventScheduler scheduler, Dictionary<string, (
             case ISimLogicSignal sig:
                 Dependencies.Add(sig);
                 return new SignalCastReadExpr<T>(sig);
+            case DynamicArrayVar<ISimLogicSignal> dynArr:
+                return new ArraySizeExpr<T>(dynArr);
+            case QueueVar<ISimLogicSignal> queue:
+                return new ArraySizeExpr<T>(queue);
             case SimLogic<BigInteger> bigConst:
             {
                 var converted = new SimLogic<T>(

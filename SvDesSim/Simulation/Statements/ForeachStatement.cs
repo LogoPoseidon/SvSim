@@ -23,10 +23,31 @@ public class ForeachStatement(
         {
             indexSignal?.AssignFromBigInteger(i, 0);
 
-            foreach (var inst in body.Execute())
+            var shouldBreak = false;
+            using (var enumerator = body.Execute().GetEnumerator())
             {
-                yield return inst;
+                while (true)
+                {
+                    YieldInstruction current;
+                    try
+                    {
+                        if (!enumerator.MoveNext()) break;
+                        current = enumerator.Current;
+                    }
+                    catch (BreakException)
+                    {
+                        shouldBreak = true;
+                        break;
+                    }
+                    catch (ContinueException)
+                    {
+                        break;
+                    }
+
+                    yield return current;
+                }
             }
+            if (shouldBreak) break;
         }
     }
 }

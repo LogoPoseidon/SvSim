@@ -1,15 +1,18 @@
-﻿using SvDesSim.Simulation.Processes;
+﻿using System.Numerics;
+using SvDesSim.Simulation.Expressions;
+using SvDesSim.Simulation.Processes;
+using SvDesSim.Simulation.Signal;
 
 namespace SvDesSim.Simulation.Statements;
 
-public class ForeverStatement(IStatement body) : IStatement
+public class RepeatStatement(IExpression<SimLogic<BigInteger>> countExpr, IStatement body) : IStatement
 {
     public IEnumerable<YieldInstruction> Execute()
     {
-        while (true)
+        var count = (long)countExpr.Evaluate().Value;
+        for (long i = 0; i < count; i++)
         {
             var shouldBreak = false;
-
             using (var enumerator = body.Execute().GetEnumerator())
             {
                 while (true)
@@ -29,13 +32,10 @@ public class ForeverStatement(IStatement body) : IStatement
                     {
                         break;
                     }
-
                     yield return current;
                 }
             }
-
             if (shouldBreak) break;
-            
         }
     }
 }

@@ -3,6 +3,8 @@ using SvDesSim.Simulation.Expressions;
 using SvDesSim.Simulation.Processes;
 using SvDesSim.Simulation.Signal;
 
+using SvDesSim.Elaboration;
+
 namespace SvDesSim.Simulation.Statements;
 
 public class CaseStatement<T>(
@@ -15,10 +17,24 @@ public class CaseStatement<T>(
     {
         var condVal = condition.Evaluate();
 
-        foreach (var item in from item in items from match in item.matches where condVal == match.Evaluate() select item)
+        foreach (var item in items)
         {
-            foreach (var inst in item.body.Execute()) yield return inst;
-            yield break;
+            foreach (var match in item.matches)
+            {
+                bool isMatch;
+                if (match is RangeMatchExpr range)
+                {
+                    isMatch = range.IsMatch((SimLogic<BigInteger>)(object)condVal);
+                }
+                else
+                {
+                    isMatch = condVal == match.Evaluate();
+                }
+
+                if (!isMatch) continue;
+                foreach (var inst in item.body.Execute()) yield return inst;
+                yield break;
+            }
         }
 
         if (defaultCase is null) yield break;

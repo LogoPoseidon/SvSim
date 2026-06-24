@@ -33,6 +33,10 @@ public class ForStatement(
                         shouldBreak = true;
                         break;
                     }
+                    catch (ContinueException)
+                    {
+                        break;
+                    }
 
                     yield return current;
                 }

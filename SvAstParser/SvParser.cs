@@ -7,7 +7,7 @@ namespace SvAstParser;
 public static class SvParser
 {
     /// <summary>
-    /// Parses an existing slang AST JSON file from disk and returns the resolved AST representation.
+    /// Parses an existing slang AST JSON file from the disk and returns the resolved AST representation.
     /// </summary>
     /// <param name="filePath">The path to the pre-generated slang AST JSON file.</param>
     /// <returns>The resolved <see cref="TopLevel"/> AST node.</returns>
